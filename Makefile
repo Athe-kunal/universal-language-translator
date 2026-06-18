@@ -8,4 +8,9 @@ train:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(CONFIG)
 
-.PHONY: train
+MODEL ?= .models/modernbert-translation/checkpoint-final
+
+translate:
+	uv run python translate.py --model_name_or_path $(MODEL)
+
+.PHONY: train translate
