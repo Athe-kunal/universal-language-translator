@@ -3,25 +3,32 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
+import warnings
 from pathlib import Path
 
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", SyntaxWarning)
+    import pysbd
 from datasets import load_dataset
-from jinja2 import Template
 from openai import AsyncOpenAI
 from tqdm import tqdm
 
 CACHE_FILE = Path("translation_cache.jsonl")
 LOG_FILE = Path("translation.log")
 CONCURRENCY = 256
-MODEL = "Qwen/Qwen2.5-32B-Instruct"
+MODEL = os.environ.get("OPENAI_MODEL", "Qwen/Qwen2.5-32B-Instruct")
 
-TRANSLATE_PROMPT = Template("""\
-Translate the text inside <translate></translate> tags to Hindi. The surrounding <context></context> shows what comes before/after — do NOT translate or reproduce it. The boundary is strict: only return the Hindi translation of the content inside <translate></translate>, nothing else. Convert numbers and digits to Hindi (Devanagari) numerals. Keep LaTeX math expressions, variables, symbols (like \\sigma, \\frac, \\boxed, etc.) and any notation that has no Hindi equivalent exactly as-is.
-
-<context>{{ before }}</context><translate>{{ chunk }}</translate><context>{{ after }}</context>\
-""")
+TRANSLATE_PROMPT = """\
+Translate the following sentence to Hindi. Rules:
+- Translate only the natural language text to Hindi.
+- Keep all numbers and digits exactly as-is (do NOT convert to Devanagari numerals).
+- Keep all LaTeX math expressions, variables, and symbols (like \\sigma, \\frac, \\boxed, etc.) exactly as-is.
+- Keep punctuation, formatting, and structure intact.
+Return only the Hindi translation, nothing else.\
+"""
 
 
 def problem_id(problem: str) -> str:
@@ -32,45 +39,58 @@ def strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
+
+# Matches display math \[...\], inline math $...$, and bare \cmd{...}{...} outside dollar signs
+_LATEX_RE = re.compile(
+    r"(\\\[.*?\\\]|\$\$.*?\$\$|\$(?:[^$\\]|\\.)+?\$|\\[a-zA-Z]+(?:\{[^}]*\})+)",
+    re.DOTALL,
+)
+
+
+def _mask_latex(text: str) -> tuple[str, list[str]]:
+    tokens: list[str] = []
+
+    def replacer(m: re.Match) -> str:
+        tokens.append(m.group(0))
+        return f"\x00LATEX{len(tokens) - 1}\x00"
+
+    return _LATEX_RE.sub(replacer, text), tokens
+
+
+def _restore_latex(text: str, tokens: list[str]) -> str:
+    for i, tok in enumerate(tokens):
+        text = text.replace(f"\x00LATEX{i}\x00", tok)
+    return text
+
+
 def split_paragraphs(text: str) -> list[str]:
-    return [p.strip() for p in text.split("\n\n") if p.strip()]
-
-
-def context_window(parts: list[str], idx: int, chars: int = 150) -> tuple[str, str]:
-    before = " ".join(parts[:idx])[-chars:]
-    after = " ".join(parts[idx + 1:])[:chars]
-    return before, after
+    masked, tokens = _mask_latex(text)
+    sentences = _SEGMENTER.segment(masked)
+    return [_restore_latex(s.strip(), tokens) for s in sentences if s.strip()]
 
 
 async def translate_chunk(
     client: AsyncOpenAI,
     sem: asyncio.Semaphore,
     chunk: str,
-    before: str,
-    after: str,
     log: logging.Logger,
 ) -> str:
-    prompt = TRANSLATE_PROMPT.render(before=before, chunk=chunk, after=after)
-    for attempt in range(3):
-        async with sem:
-            resp = await client.chat.completions.create(
-                model=MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        content = (resp.choices[0].message.content or "").strip()
-        if "<translate>" not in content and "</translate>" not in content:
-            return content
-        log.warning(f"Attempt {attempt + 1}: leaked <translate> tags, retrying")
-    log.error("Leaked tags persisted after 3 attempts, returning raw")
-    return content
+    async with sem:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": TRANSLATE_PROMPT},
+                {"role": "user", "content": chunk},
+            ],
+            temperature=0.0,
+        )
+    return (resp.choices[0].message.content or "").strip()
 
 
 async def translate(client: AsyncOpenAI, sem: asyncio.Semaphore, text: str, log: logging.Logger) -> str:
     parts = split_paragraphs(text)
-    tasks = [
-        translate_chunk(client, sem, chunk, *context_window(parts, i), log)
-        for i, chunk in enumerate(parts)
-    ]
+    tasks = [translate_chunk(client, sem, chunk, log) for chunk in parts]
     results = await asyncio.gather(*tasks)
     return "\n\n".join(results)
 
@@ -131,9 +151,9 @@ async def worker(
             queue.task_done()
 
 
-async def main(smoke: bool = False) -> None:
-    cache_file = Path("smoke_translation_cache.jsonl") if smoke else CACHE_FILE
-    log_file = Path("smoke_translation.log") if smoke else LOG_FILE
+async def main(num_examples: int | None = None) -> None:
+    cache_file = CACHE_FILE
+    log_file = LOG_FILE
 
     logging.basicConfig(
         level=logging.INFO,
@@ -145,7 +165,7 @@ async def main(smoke: bool = False) -> None:
     )
     log = logging.getLogger("translate")
 
-    done = load_done() if not smoke else set()
+    done = load_done()
     log.info(f"Loaded {len(done)} already-translated entries from cache")
 
     ds = load_dataset("open-r1/OpenR1-Math-220k", split="train")
@@ -154,14 +174,17 @@ async def main(smoke: bool = False) -> None:
         if any(ex["correctness_math_verify"]) and problem_id(ex["problem"]) not in done
     ]
 
-    if smoke:
-        examples = examples[:3]
-        log.info("Smoke mode: running 3 examples")
+    if num_examples is not None:
+        examples = examples[:num_examples]
+        log.info(f"Capped to {num_examples} examples")
 
     log.info(f"Queuing {len(examples)} examples ({len(done)} skipped)")
 
     concurrency = min(CONCURRENCY, len(examples))
-    client = AsyncOpenAI(base_url="http://localhost:8069/v1", api_key="none")
+    client = AsyncOpenAI(
+        base_url=os.environ.get("OPENAI_BASE_URL", "http://localhost:8069/v1"),
+        api_key=os.environ.get("OPENAI_API_KEY", "none"),
+    )
     queue: asyncio.Queue = asyncio.Queue(maxsize=concurrency * 2)
     write_lock = asyncio.Lock()
     sem = asyncio.Semaphore(64)
@@ -184,19 +207,9 @@ async def main(smoke: bool = False) -> None:
 
     pbar.close()
 
-    if smoke:
-        log.info(f"Smoke test complete — results in {cache_file}, logs in {log_file}")
-        if cache_file.exists():
-            with open(cache_file) as f:
-                entries = [json.loads(l) for l in f]
-            log.info(f"Wrote {len(entries)} entries")
-            for e in entries:
-                log.info(f"  problem[:80]: {e['problem'][:80]!r}")
-                log.info(f"  problem_hi[:80]: {e['problem_hi'][:80]!r}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--smoke", action="store_true", help="Translate 3 examples to verify the pipeline")
+    parser.add_argument("--num_examples", type=int, default=None, help="Cap the number of examples to translate (default: all)")
     args = parser.parse_args()
-    asyncio.run(main(smoke=args.smoke))
+    asyncio.run(main(num_examples=args.num_examples))
