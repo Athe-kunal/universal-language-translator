@@ -32,7 +32,8 @@ training:
   save_strategy: "epoch"
   logging_steps: 10
   seed: 42
-  report_to: "none"
+  report_to: "wandb"
+  wandb_project: "universal-language-translator"
   # dllm MDLM-specific
   time_epsilon: 1.0e-3
   loss_weight_type: "scheduler"

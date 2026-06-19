@@ -28,6 +28,45 @@ import dllm
 from loguru import logger
 
 
+class WandbArtifactCallback(transformers.TrainerCallback):
+    """Upload model checkpoint as a W&B artifact after each epoch."""
+
+    def __init__(self, project: str):
+        self.project = project
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        try:
+            import wandb
+        except ImportError:
+            logger.warning("wandb not installed — skipping artifact upload.")
+            return
+
+        if not wandb.run:
+            return
+
+        epoch = int(state.epoch)
+        ckpt_dir = Path(args.output_dir) / f"checkpoint-epoch-{epoch}"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        model = kwargs.get("model")
+        tokenizer = kwargs.get("processing_class") or kwargs.get("tokenizer")
+
+        if model is not None:
+            model.save_pretrained(ckpt_dir)
+        if tokenizer is not None:
+            tokenizer.save_pretrained(ckpt_dir)
+
+        artifact = wandb.Artifact(
+            name=f"modernbert-translation-epoch-{epoch}",
+            type="model",
+            description=f"ModernBERT translation checkpoint after epoch {epoch}",
+            metadata={"epoch": epoch, "step": state.global_step},
+        )
+        artifact.add_dir(str(ckpt_dir))
+        wandb.log_artifact(artifact)
+        logger.info(f"Uploaded W&B artifact for epoch {epoch} from {ckpt_dir}")
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses — defaults come from the YAML; CLI flags override them.
 # ---------------------------------------------------------------------------
@@ -56,6 +95,8 @@ class TrainingArguments(dllm.core.trainers.MDLMConfig):
     eval_strategy: str = "epoch"
     save_strategy: str = "epoch"
     logging_steps: int = 10
+    report_to: str = "wandb"
+    wandb_project: str = "universal-language-translator"
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +180,9 @@ def train():
     dllm.utils.print_args_main(model_args, data_args, training_args)
     dllm.utils.initial_training_setup(model_args, data_args, training_args)
 
+    if training_args.report_to in ("wandb", "all"):
+        os.environ.setdefault("WANDB_PROJECT", training_args.wandb_project)
+
     # --- Model & tokenizer ---
     model = dllm.utils.get_model(model_args=model_args)
     tokenizer = dllm.utils.get_tokenizer(model_args=model_args)
@@ -165,12 +209,17 @@ def train():
     )
 
     # --- Trainer ---
+    callbacks = []
+    if training_args.report_to in ("wandb", "all"):
+        callbacks.append(WandbArtifactCallback(project=training_args.wandb_project))
+
     trainer = dllm.core.trainers.MDLMTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
         args=training_args,
+        callbacks=callbacks,
         data_collator=dllm.utils.NoAttentionMaskWrapper(
             transformers.DataCollatorForSeq2Seq(
                 tokenizer,
