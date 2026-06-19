@@ -1,6 +1,6 @@
 CONFIG     ?= translation_config.yaml
 GPUS       ?= 1
-ACCEL_CFG  ?= dllm/scripts/accelerate_configs/ddp.yaml
+ACCEL_CFG  ?= dllm-src/scripts/accelerate_configs/ddp.yaml
 
 train:
 	uv run accelerate launch \

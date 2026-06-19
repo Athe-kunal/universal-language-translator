@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "dllm",
     "datasets>=4.0.0",
     "fastapi>=0.117.1",
     "ipykernel>=7.1.0",
@@ -25,12 +26,14 @@ dependencies = [
     "zstandard>=0.25.0",
     "diskcache>=5.6.3",
     "omegaconf>=2.3.0",
-    "accelerate>=1.13.0",
+    "accelerate>=1.11.0",
     "nvitop>=1.6.2",
     "rich>=15.0.0",
     "loguru>=0.7.3",
     "openai>=2.41.0",
     "pysbd>=0.3.4",
+    "lm-eval>=0.4.12",
+    "trl>=0.29.1",
 ]
 
 [dependency-groups]
@@ -51,6 +54,7 @@ python_functions = ["test_*"]
 
 # target torch to cuda 12.8 or CPU
 [tool.uv.sources]
+dllm = { path = "dllm-src", editable = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "gpu" },
