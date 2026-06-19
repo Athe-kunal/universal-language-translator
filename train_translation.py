@@ -320,11 +320,6 @@ def train():
     )
     trainer.train()
 
-    ckpt = os.path.join(training_args.output_dir, "checkpoint-final")
-    trainer.save_model(ckpt)
-    tokenizer.save_pretrained(ckpt)
-    logger.info(f"Saved to {ckpt}")
-
 
 if __name__ == "__main__":
     train()

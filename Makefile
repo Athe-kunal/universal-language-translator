@@ -1,5 +1,5 @@
 CONFIG     ?= translation_config.yaml
-GPUS       ?= 1
+GPUS       ?= 2
 ACCEL_CFG  ?= dllm-src/scripts/accelerate_configs/ddp.yaml
 
 train:
