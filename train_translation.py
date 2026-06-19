@@ -15,6 +15,8 @@ Pass a custom config file:
 import argparse
 import json
 import os
+import re
+import warnings
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -24,8 +26,49 @@ import accelerate
 import transformers
 from datasets import Dataset, DatasetDict
 
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", SyntaxWarning)
+    import pysbd
+
 import dllm
 from loguru import logger
+
+# Mirrors the split logic in data_gen/translate_ds.py exactly.
+_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
+_LATEX_RE = re.compile(
+    r"(\\\[.*?\\\]|\$\$.*?\$\$|\$(?:[^$\\]|\\.)+?\$|\\[a-zA-Z]+(?:\{[^}]*\})+)",
+    re.DOTALL,
+)
+
+
+def _mask_latex(text: str) -> tuple[str, list[str]]:
+    tokens: list[str] = []
+
+    def replacer(m: re.Match) -> str:
+        tokens.append(m.group(0))
+        return f"\x00LATEX{len(tokens) - 1}\x00"
+
+    return _LATEX_RE.sub(replacer, text), tokens
+
+
+def _restore_latex(text: str, tokens: list[str]) -> str:
+    for i, tok in enumerate(tokens):
+        text = text.replace(f"\x00LATEX{i}\x00", tok)
+    return text
+
+
+def split_en(text: str) -> list[str]:
+    """Split English text into chunks using the same method used during translation."""
+    masked, tokens = _mask_latex(text)
+    sentences = _SEGMENTER.segment(masked)
+    return [_restore_latex(s.strip(), tokens) for s in sentences if s.strip()]
+
+
+def split_hi(text: str, n: int) -> list[str] | None:
+    """Split Hindi text on \\n\\n into exactly n chunks (how it was assembled).
+    Returns None if the count doesn't match, signalling fallback to whole-pair."""
+    chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
+    return chunks if len(chunks) == n else None
 
 
 class WandbArtifactCallback(transformers.TrainerCallback):
@@ -80,6 +123,7 @@ class ModelArguments(dllm.utils.ModelArguments):
 class DataArguments(dllm.utils.DataArguments):
     jsonl_path: str = "translation_cache.jsonl"
     max_length: int = 512
+    max_token_length: int = 8192  # drop examples whose tokenized length exceeds this
     mask_prompt_loss: bool = True
     load_preprocessed_data: bool = False
 
@@ -127,21 +171,49 @@ def yaml_to_argv(cfg: dict) -> list[str]:
 
 def load_translation_dataset(jsonl_path: str, tasks: list[dict]) -> DatasetDict:
     """
-    Each JSONL row produces one example per task.
-    A task maps a source_field (English) to a target_field (Hindi).
+    Each JSONL row is split into sentence-level chunk pairs using the same
+    split_paragraphs logic used during translation generation. English is split
+    with pysbd (masking LaTeX first); Hindi is split on \\n\\n since that's
+    how translate_ds.py assembled it. When counts match, each chunk pair becomes
+    one training example. When they don't match, the whole pair is used as-is.
     """
     records = []
+    whole_pair_fallbacks = 0
+
     with open(jsonl_path) as f:
         for line in f:
             ex = json.loads(line)
             for task in tasks:
-                records.append({
-                    "task": task["name"],
-                    "messages": [
-                        {"role": "user",      "content": ex[task["source_field"]]},
-                        {"role": "assistant", "content": ex[task["target_field"]]},
-                    ],
-                })
+                en_text = ex[task["source_field"]]
+                hi_text = ex[task["target_field"]]
+
+                en_chunks = split_en(en_text)
+                hi_chunks = split_hi(hi_text, len(en_chunks))
+
+                if hi_chunks is None:
+                    # Counts don't align — use the whole pair as one example
+                    whole_pair_fallbacks += 1
+                    records.append({
+                        "task": task["name"],
+                        "messages": [
+                            {"role": "user",      "content": en_text},
+                            {"role": "assistant", "content": hi_text},
+                        ],
+                    })
+                else:
+                    for en_chunk, hi_chunk in zip(en_chunks, hi_chunks):
+                        records.append({
+                            "task": task["name"],
+                            "messages": [
+                                {"role": "user",      "content": en_chunk},
+                                {"role": "assistant", "content": hi_chunk},
+                            ],
+                        })
+
+    logger.info(
+        f"Built {len(records)} examples from {jsonl_path} "
+        f"({whole_pair_fallbacks} whole-pair fallbacks)"
+    )
     dataset = Dataset.from_list(records)
     split = dataset.train_test_split(test_size=0.05, seed=42)
     return DatasetDict({"train": split["train"], "test": split["test"]})
@@ -200,6 +272,23 @@ def train():
             num_proc=data_args.num_proc,
             desc="Tokenizing",
         )
+
+        # Drop examples longer than max_token_length tokens (they would be
+        # truncated/cause indexing errors and skew the loss).
+        max_tok = data_args.max_token_length
+        before = {k: len(v) for k, v in dataset.items()}
+        dataset = dataset.filter(
+            lambda ex: len(ex["input_ids"]) <= max_tok,
+            num_proc=data_args.num_proc,
+            desc=f"Filtering > {max_tok} tokens",
+        )
+        for k, n_before in before.items():
+            n_after = len(dataset[k])
+            logger.info(
+                f"{k}: dropped {n_before - n_after} / {n_before} examples "
+                f"longer than {max_tok} tokens"
+            )
+
         dataset = dllm.utils.post_process_dataset(dataset, data_args)
 
     accelerate.PartialState().wait_for_everyone()
