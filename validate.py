@@ -33,10 +33,10 @@ async def writer(queue: asyncio.Queue, out: Path) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", default=".models/modernbert-translation/checkpoint-24942")
+    parser.add_argument("--checkpoint", default=".models/modernbert-translation-bs16/checkpoint-24942")
     parser.add_argument("--n", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--out", default="validation.jsonl")
     args = parser.parse_args()
 
