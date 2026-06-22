@@ -33,6 +33,27 @@ class SamplerConfig(dllm.core.samplers.MDLMSamplerConfig):
     remasking: str = "low_confidence"
 
 
+def load_pipeline(model_args: ScriptArguments):
+    model = dllm.utils.get_model(model_args=model_args).eval()
+    tokenizer = dllm.utils.get_tokenizer(model_args=model_args)
+    sampler = dllm.core.samplers.MDLMSampler(model=model, tokenizer=tokenizer)
+    return model, tokenizer, sampler
+
+
+def translate_one(text: str, tokenizer, sampler, config: SamplerConfig) -> str:
+    return translate_batch([text], tokenizer, sampler, config)[0]
+
+
+def translate_batch(texts: list[str], tokenizer, sampler, config: SamplerConfig) -> list[str]:
+    messages = [[{"role": "user", "content": t}] for t in texts]
+    inputs = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, tokenize=True
+    )
+    outputs = sampler.sample(inputs, config, return_dict=True)
+    sequences = dllm.utils.sample_trim(tokenizer, outputs.sequences.tolist(), inputs)
+    return [s.strip() for s in sequences]
+
+
 def main():
     parser = transformers.HfArgumentParser((ScriptArguments, SamplerConfig))
     script_args, sampler_config = parser.parse_args_into_dataclasses()
@@ -40,9 +61,7 @@ def main():
     console.print(Rule("[bold magenta]Universal Language Translator[/]"))
     console.print(f"[dim]Loading model from [cyan]{script_args.model_name_or_path}[/cyan]...[/dim]")
 
-    model = dllm.utils.get_model(model_args=script_args).eval()
-    tokenizer = dllm.utils.get_tokenizer(model_args=script_args)
-    sampler = dllm.core.samplers.MDLMSampler(model=model, tokenizer=tokenizer)
+    _, tokenizer, sampler = load_pipeline(script_args)
     visualizer = dllm.utils.TerminalVisualizer(tokenizer=tokenizer)
 
     console.print("[green]Model ready.[/green] Type [bold]exit[/bold] or [bold]quit[/bold] to stop.\n")
