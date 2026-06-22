@@ -5,17 +5,15 @@ model:
   lora: false
 
 data:
-  jsonl_path: "translation_cache.jsonl"
+  jsonl_path: "translation_chunked.jsonl"
   max_length: 1024
   mask_prompt_loss: true
   num_proc: 4
   tasks:
     - name: "question"
-      source_field: "problem"
-      target_field: "problem_hi"
+      chunks_field: "problem_chunks"
     - name: "solution"
-      source_field: "solution"
-      target_field: "solution_hi"
+      chunks_field: "solution_chunks"
 
 training:
   output_dir: ".models/modernbert-translation-bs16"

@@ -31,6 +31,7 @@ dependencies = [
     "rich>=15.0.0",
     "loguru>=0.7.3",
     "openai>=2.41.0",
+    "litellm>=1.72.0",
     "pysbd>=0.3.4",
     "lm-eval>=0.4.12",
     "trl>=0.29.1",

@@ -128,49 +128,28 @@ def yaml_to_argv(cfg: dict) -> list[str]:
 
 def load_translation_dataset(jsonl_path: str, tasks: list[dict]) -> DatasetDict:
     """
-    Each JSONL row is split into sentence-level chunk pairs using the same
-    split_paragraphs logic used during translation generation. English is split
-    with pysbd (masking LaTeX first); Hindi is split on \\n\\n since that's
-    how translate_ds.py assembled it. When counts match, each chunk pair becomes
-    one training example. When they don't match, the whole pair is used as-is.
+    Reads translation_chunked.jsonl directly. Each task specifies a chunks_field
+    (e.g. "problem_chunks" or "solution_chunks") whose value is a list of
+    {"en": ..., "hi": ...} pairs — one training example per pair.
     """
     records = []
-    whole_pair_fallbacks = 0
 
     with open(jsonl_path) as f:
         for line in f:
             ex = json.loads(line)
             for task in tasks:
-                en_text = ex[task["source_field"]]
-                hi_text = ex[task["target_field"]]
-
-                en_chunks = split_en(en_text)
-                hi_chunks = split_hi(hi_text, len(en_chunks))
-
-                if hi_chunks is None:
-                    # Counts don't align — use the whole pair as one example
-                    whole_pair_fallbacks += 1
+                for chunk in ex[task["chunks_field"]]:
+                    if not chunk.get("en") or not chunk.get("hi"):
+                        continue
                     records.append({
                         "task": task["name"],
                         "messages": [
-                            {"role": "user",      "content": en_text},
-                            {"role": "assistant", "content": hi_text},
+                            {"role": "user",      "content": chunk["en"]},
+                            {"role": "assistant", "content": chunk["hi"]},
                         ],
                     })
-                else:
-                    for en_chunk, hi_chunk in zip(en_chunks, hi_chunks):
-                        records.append({
-                            "task": task["name"],
-                            "messages": [
-                                {"role": "user",      "content": en_chunk},
-                                {"role": "assistant", "content": hi_chunk},
-                            ],
-                        })
 
-    logger.info(
-        f"Built {len(records)} examples from {jsonl_path} "
-        f"({whole_pair_fallbacks} whole-pair fallbacks)"
-    )
+    logger.info(f"Built {len(records)} examples from {jsonl_path}")
     dataset = Dataset.from_list(records)
     split = dataset.train_test_split(test_size=0.05, seed=42)
     return DatasetDict({"train": split["train"], "test": split["test"]})
@@ -188,8 +167,8 @@ def train():
 
     yaml_argv: list[str] = []
     tasks: list[dict] = [
-        {"name": "question", "source_field": "problem",  "target_field": "problem_hi"},
-        {"name": "solution", "source_field": "solution", "target_field": "solution_hi"},
+        {"name": "question", "chunks_field": "problem_chunks"},
+        {"name": "solution", "chunks_field": "solution_chunks"},
     ]
     if known.config:
         cfg = load_yaml_config(known.config)
