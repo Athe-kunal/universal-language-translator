@@ -16,7 +16,7 @@ from datasets import load_dataset
 from openai import AsyncOpenAI
 from tqdm import tqdm
 
-CACHE_FILE = Path("translation_cache.jsonl")
+CACHE_FILE = Path("translation_chunked.jsonl")
 LOG_FILE = Path("translation.log")
 CONCURRENCY = 256
 MODEL = os.environ.get("OPENAI_MODEL", "Qwen/Qwen2.5-32B-Instruct")
@@ -88,11 +88,11 @@ async def translate_chunk(
     return (resp.choices[0].message.content or "").strip()
 
 
-async def translate(client: AsyncOpenAI, sem: asyncio.Semaphore, text: str, log: logging.Logger) -> str:
+async def translate(client: AsyncOpenAI, sem: asyncio.Semaphore, text: str, log: logging.Logger) -> list[dict]:
     parts = split_paragraphs(text)
     tasks = [translate_chunk(client, sem, chunk, log) for chunk in parts]
     results = await asyncio.gather(*tasks)
-    return "\n\n".join(results)
+    return [{"en": en, "hi": hi} for en, hi in zip(parts, results)]
 
 
 def load_done() -> set[str]:
@@ -136,9 +136,9 @@ async def worker(
             entry = {
                 "id": pid,
                 "problem": problem,
-                "problem_hi": problem_hi,
+                "problem_chunks": problem_hi,
                 "solution": solution,
-                "solution_hi": solution_hi,
+                "solution_chunks": solution_hi,
             }
             async with write_lock:
                 cache_fh.write(json.dumps(entry, ensure_ascii=False) + "\n")

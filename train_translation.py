@@ -15,8 +15,6 @@ Pass a custom config file:
 import argparse
 import json
 import os
-import re
-import warnings
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -26,49 +24,8 @@ import accelerate
 import transformers
 from datasets import Dataset, DatasetDict
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", SyntaxWarning)
-    import pysbd
-
 import dllm
 from loguru import logger
-
-# Mirrors the split logic in data_gen/translate_ds.py exactly.
-_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
-_LATEX_RE = re.compile(
-    r"(\\\[.*?\\\]|\$\$.*?\$\$|\$(?:[^$\\]|\\.)+?\$|\\[a-zA-Z]+(?:\{[^}]*\})+)",
-    re.DOTALL,
-)
-
-
-def _mask_latex(text: str) -> tuple[str, list[str]]:
-    tokens: list[str] = []
-
-    def replacer(m: re.Match) -> str:
-        tokens.append(m.group(0))
-        return f"\x00LATEX{len(tokens) - 1}\x00"
-
-    return _LATEX_RE.sub(replacer, text), tokens
-
-
-def _restore_latex(text: str, tokens: list[str]) -> str:
-    for i, tok in enumerate(tokens):
-        text = text.replace(f"\x00LATEX{i}\x00", tok)
-    return text
-
-
-def split_en(text: str) -> list[str]:
-    """Split English text into chunks using the same method used during translation."""
-    masked, tokens = _mask_latex(text)
-    sentences = _SEGMENTER.segment(masked)
-    return [_restore_latex(s.strip(), tokens) for s in sentences if s.strip()]
-
-
-def split_hi(text: str, n: int) -> list[str] | None:
-    """Split Hindi text on \\n\\n into exactly n chunks (how it was assembled).
-    Returns None if the count doesn't match, signalling fallback to whole-pair."""
-    chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
-    return chunks if len(chunks) == n else None
 
 
 class WandbArtifactCallback(transformers.TrainerCallback):
@@ -121,7 +78,7 @@ class ModelArguments(dllm.utils.ModelArguments):
 
 @dataclass
 class DataArguments(dllm.utils.DataArguments):
-    jsonl_path: str = "translation_cache.jsonl"
+    jsonl_path: str = "translation_chunked.jsonl"
     max_length: int = 512
     max_token_length: int = 8192  # drop examples whose tokenized length exceeds this
     mask_prompt_loss: bool = True
