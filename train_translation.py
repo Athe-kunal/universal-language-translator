@@ -234,6 +234,14 @@ def train():
     model = dllm.utils.get_model(model_args=model_args)
     tokenizer = dllm.utils.get_tokenizer(model_args=model_args)
 
+    # Alias pad -> eos so the collator's padded region and the sampler's
+    # canvas background agree on the same token. This is a no-op for
+    # tokenizers where pad already equals eos (e.g. ModernBERT-base, which
+    # has no native eos and falls back to pad); it matters for tokenizers
+    # like mmBERT-base where pad and eos are distinct native tokens.
+    if tokenizer.eos_token_id is not None and tokenizer.pad_token_id != tokenizer.eos_token_id:
+        tokenizer.pad_token = tokenizer.eos_token
+
     # --- Dataset ---
     with accelerate.PartialState().local_main_process_first():
         if data_args.dataset_format == "flat":
@@ -300,6 +308,8 @@ def train():
                 tokenizer,
                 return_tensors="pt",
                 padding=True,
+                # pad_token_id is aliased to eos_token_id above, so padded
+                # labels match the sampler's canvas background token too.
                 label_pad_token_id=tokenizer.pad_token_id,
             )
         ),
