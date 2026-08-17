@@ -16,7 +16,14 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", SyntaxWarning)
     from data_gen.translate_ds import split_paragraphs as split_en
 
-from translate import ScriptArguments, SamplerConfig, load_pipeline, translate_one, translate_batch
+from translate import (
+    ScriptArguments,
+    SamplerConfig,
+    estimate_max_new_tokens,
+    load_pipeline,
+    translate_one,
+    translate_batch,
+)
 
 
 @st.cache_resource(show_spinner="Loading model…")
@@ -52,7 +59,37 @@ def _load_cache(path: str, mtime: float):
 st.set_page_config(page_title="EN → HI Translator", layout="centered")
 st.title("English → Hindi Translator")
 
-tab_translate, tab_cache = st.tabs(["Translate", "Translation Cache"])
+tab_free, tab_translate, tab_cache = st.tabs(["Translate (free text)", "Translate (Q&A)", "Translation Cache"])
+
+with tab_free:
+    model_path_free = st.sidebar.text_input(
+        "Checkpoint path (free text)",
+        value=".models/modernbert-chat-bpcc-translation/checkpoint-3609",
+        key="model_path_free",
+    )
+    st.caption(f"Model: `{model_path_free}`")
+
+    english_text = st.text_area(
+        "English",
+        height=150,
+        placeholder="Type or paste English text to translate…",
+        key="free_text_input",
+    )
+
+    if st.button("Translate to Hindi", type="primary", disabled=not english_text.strip()):
+        try:
+            tokenizer, sampler = _load(model_path_free)
+        except Exception as e:
+            st.error(f"Failed to load model from `{model_path_free}`:\n\n{e}")
+            st.stop()
+
+        max_new_tokens = estimate_max_new_tokens([english_text], tokenizer)
+        config = SamplerConfig(max_new_tokens=max_new_tokens, steps=max_new_tokens)
+
+        with st.spinner("Translating…"):
+            hindi_text = translate_one(english_text.strip(), tokenizer, sampler, config)
+
+        st.text_area("Hindi", value=hindi_text or "<empty>", height=150, disabled=True)
 
 with tab_cache:
     cache_path = st.text_input("Cache file path", value="translation_cache.jsonl")

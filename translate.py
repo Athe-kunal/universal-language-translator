@@ -40,6 +40,23 @@ def load_pipeline(model_args: ScriptArguments):
     return model, tokenizer, sampler
 
 
+def estimate_max_new_tokens(
+    texts: list[str],
+    tokenizer,
+    factor: float = 2.5,
+    min_tokens: int = 16,
+    max_tokens: int = 96,
+) -> int:
+    """
+    Sizes the fixed diffusion canvas to roughly fit the expected translation
+    length. Sizing max_new_tokens much larger than the real translation
+    leaves trailing positions with no signal to denoise, which this MDLM
+    checkpoint fills with repetitive garbage instead of padding cleanly.
+    """
+    longest_src = max(len(tokenizer(t)["input_ids"]) for t in texts)
+    return max(min_tokens, min(max_tokens, round(longest_src * factor)))
+
+
 def translate_one(text: str, tokenizer, sampler, config: SamplerConfig) -> str:
     return translate_batch([text], tokenizer, sampler, config)[0]
 

@@ -79,6 +79,10 @@ class ModelArguments(dllm.utils.ModelArguments):
 @dataclass
 class DataArguments(dllm.utils.DataArguments):
     jsonl_path: str = "translation_chunked.jsonl"
+    dataset_format: str = "chunked"  # "chunked" (translation_chunked.jsonl) or "flat" (src/tgt per line)
+    src_field: str = "src"
+    tgt_field: str = "tgt"
+    eval_split: float = 0.05
     max_length: int = 512
     max_token_length: int = 8192  # drop examples whose tokenized length exceeds this
     mask_prompt_loss: bool = True
@@ -126,7 +130,9 @@ def yaml_to_argv(cfg: dict) -> list[str]:
 # Dataset
 # ---------------------------------------------------------------------------
 
-def load_translation_dataset(jsonl_path: str, tasks: list[dict]) -> DatasetDict:
+def load_translation_dataset(
+    jsonl_path: str, tasks: list[dict], eval_split: float, seed: int
+) -> DatasetDict:
     """
     Reads translation_chunked.jsonl directly. Each task specifies a chunks_field
     (e.g. "problem_chunks" or "solution_chunks") whose value is a list of
@@ -151,7 +157,40 @@ def load_translation_dataset(jsonl_path: str, tasks: list[dict]) -> DatasetDict:
 
     logger.info(f"Built {len(records)} examples from {jsonl_path}")
     dataset = Dataset.from_list(records)
-    split = dataset.train_test_split(test_size=0.05, seed=42)
+    split = dataset.train_test_split(test_size=eval_split, seed=seed)
+    return DatasetDict({"train": split["train"], "test": split["test"]})
+
+
+def load_flat_translation_dataset(
+    jsonl_path: str,
+    src_field: str,
+    tgt_field: str,
+    eval_split: float,
+    seed: int,
+) -> DatasetDict:
+    """
+    Reads a flat translation JSONL file (one {src, tgt, ...} record per line,
+    e.g. bpcc_hin_deva.jsonl) into a single "translation" task.
+    """
+    records = []
+
+    with open(jsonl_path) as f:
+        for line in f:
+            ex = json.loads(line)
+            src, tgt = ex.get(src_field), ex.get(tgt_field)
+            if not src or not tgt:
+                continue
+            records.append({
+                "task": "translation",
+                "messages": [
+                    {"role": "user",      "content": src},
+                    {"role": "assistant", "content": tgt},
+                ],
+            })
+
+    logger.info(f"Built {len(records)} examples from {jsonl_path}")
+    dataset = Dataset.from_list(records)
+    split = dataset.train_test_split(test_size=eval_split, seed=seed)
     return DatasetDict({"train": split["train"], "test": split["test"]})
 
 
@@ -197,7 +236,18 @@ def train():
 
     # --- Dataset ---
     with accelerate.PartialState().local_main_process_first():
-        dataset = load_translation_dataset(data_args.jsonl_path, tasks)
+        if data_args.dataset_format == "flat":
+            dataset = load_flat_translation_dataset(
+                data_args.jsonl_path,
+                data_args.src_field,
+                data_args.tgt_field,
+                data_args.eval_split,
+                training_args.seed,
+            )
+        else:
+            dataset = load_translation_dataset(
+                data_args.jsonl_path, tasks, data_args.eval_split, training_args.seed
+            )
         map_fn = partial(
             dllm.utils.default_sft_map_fn,
             tokenizer=tokenizer,
