@@ -5,34 +5,33 @@ model:
   lora: false
 
 data:
-  jsonl_path: "translation_chunked.jsonl"
-  max_length: 1024
+  jsonl_path: "bpcc_hin_deva.jsonl"
+  dataset_format: "flat"
+  src_field: "src"
+  tgt_field: "tgt"
+  eval_split: 0.2
+  max_length: 512
   mask_prompt_loss: true
   num_proc: 4
-  tasks:
-    - name: "question"
-      chunks_field: "problem_chunks"
-    - name: "solution"
-      chunks_field: "solution_chunks"
 
 training:
-  output_dir: ".models/mmbert-translation-bs16"
-  num_train_epochs: 3
-  per_device_train_batch_size: 16
+  output_dir: ".models/mmbert-bpcc-translation-10epoch"
+  num_train_epochs: 10
+  per_device_train_batch_size: 32
   per_device_eval_batch_size: 64
-  learning_rate: 3.0e-5
+  learning_rate: 1.0e-4
   lr_scheduler_type: "cosine"
-  warmup_ratio: 0.05
+  warmup_ratio: 0.1
+  weight_decay: 0.01
   gradient_accumulation_steps: 1
   bf16: true
   group_by_length: true
   eval_strategy: "epoch"
-  save_strategy: "steps"
-  save_steps: 5000
-  save_total_limit: 5
-  logging_steps: 10
+  save_strategy: "epoch"
+  save_total_limit: 3
+  logging_steps: 20
   seed: 42
-  report_to: "wandb"
+  report_to: "none"
   wandb_project: "universal-language-translator"
   # dllm MDLM-specific
   time_epsilon: 1.0e-3

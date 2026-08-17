@@ -1,5 +1,5 @@
 model:
-  model_name_or_path: "jhu-clsp/mmBERT-base"
+  model_name_or_path: "answerdotai/ModernBERT-base"
   dtype: "bfloat16"
   attn_implementation: null
   lora: false
@@ -16,7 +16,7 @@ data:
       chunks_field: "solution_chunks"
 
 training:
-  output_dir: ".models/mmbert-translation-bs16"
+  output_dir: ".models/modernbert-translation-bs16"
   num_train_epochs: 3
   per_device_train_batch_size: 16
   per_device_eval_batch_size: 64
