@@ -17,10 +17,10 @@ uv sync --extra cpu   # CPU-only
 ### Training
 ```bash
 make train                                       # 2-GPU DDP, default config
-make train CONFIG=translation_config.yaml GPUS=4
+make train CONFIG=configs/translation_config.yaml GPUS=4
 # Direct form:
 accelerate launch --config_file dllm-src/scripts/accelerate_configs/ddp.yaml \
-    --num_processes 2 train_translation.py --config translation_config.yaml
+    --num_processes 2 train_translation.py --config configs/translation_config.yaml
 ```
 
 ### Inference
@@ -63,7 +63,7 @@ data_gen/translate_ds_batch.py  ──►  (same output)
    ```
    Chunks are sentence-level `{"en", "hi"}` pairs with LaTeX preserved.
 
-4. **train_translation.py** — Reads chunked JSONL, creates chat-format examples directly from each `{"en", "hi"}` pair (`user`=English, `assistant`=Hindi), tokenizes for MDLM training. Config via `translation_config.yaml` or CLI flags.
+4. **train_translation.py** — Reads chunked JSONL, creates chat-format examples directly from each `{"en", "hi"}` pair (`user`=English, `assistant`=Hindi), tokenizes for MDLM training. Config via `configs/translation_config.yaml` or CLI flags.
 
 ### dllm library (`dllm-src/`)
 

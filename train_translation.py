@@ -9,7 +9,7 @@ Run from the dllm/ subdirectory so accelerate configs are available:
         ../train_translation.py
 
 Pass a custom config file:
-    accelerate launch ... ../train_translation.py --config ../translation_config.yaml
+    accelerate launch ... ../train_translation.py --config ../configs/translation_config.yaml
 """
 
 import argparse

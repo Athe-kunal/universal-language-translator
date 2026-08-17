@@ -25,7 +25,7 @@ import litellm
 from datasets import load_dataset
 from tqdm import tqdm
 
-from translate_ds import TRANSLATE_PROMPT, problem_id, split_paragraphs, strip_think
+from translate_ds import TRANSLATE_PROMPT, load_done, problem_id, split_paragraphs, strip_think
 
 CACHE_FILE = Path("translation_chunked.jsonl")
 JOBS_FILE = Path("batch_jobs.jsonl")
@@ -38,19 +38,6 @@ litellm.suppress_debug_info = True
 # ---------------------------------------------------------------------------
 # Cache / state helpers
 # ---------------------------------------------------------------------------
-
-def load_done() -> set[str]:
-    if not CACHE_FILE.exists():
-        return set()
-    done = set()
-    with open(CACHE_FILE) as f:
-        for line in f:
-            try:
-                done.add(json.loads(line)["id"])
-            except (json.JSONDecodeError, KeyError):
-                pass
-    return done
-
 
 def load_jobs() -> list[dict]:
     if not JOBS_FILE.exists():

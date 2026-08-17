@@ -1,4 +1,4 @@
-CONFIG     ?= bpcc_translation_config.yaml
+CONFIG     ?= configs/bpcc_translation_config.yaml
 GPUS       ?= 2
 GPU_IDS    ?= 2,3
 ACCEL_CFG  ?= dllm-src/scripts/accelerate_configs/ddp.yaml
