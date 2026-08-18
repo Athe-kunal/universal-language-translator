@@ -102,6 +102,13 @@ class TrainingArguments(dllm.core.trainers.MDLMConfig):
     logging_steps: int = 10
     report_to: str = "wandb"
     wandb_project: str = "universal-language-translator"
+    # Fixed diffusion-canvas width to pad every training batch out to (with
+    # EOS, kept in the loss). group_by_length minimizes padding per batch,
+    # which starves the model of examples where it must predict EOS across a
+    # long trailing span — exactly the span the MDLM sampler leaves for it at
+    # inference (`max_new_tokens`). Set to 0 to disable and fall back to
+    # ordinary dynamic batch-max padding.
+    fixed_canvas_length: int = 128
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +303,21 @@ def train():
     if training_args.report_to in ("wandb", "all"):
         callbacks.append(WandbArtifactCallback(project=training_args.wandb_project))
 
+    base_collator = transformers.DataCollatorForSeq2Seq(
+        tokenizer,
+        return_tensors="pt",
+        padding=True,
+        # pad_token_id is aliased to eos_token_id above, so padded
+        # labels match the sampler's canvas background token too.
+        label_pad_token_id=tokenizer.pad_token_id,
+    )
+    if training_args.fixed_canvas_length > 0:
+        base_collator = dllm.utils.FixedCanvasPaddingWrapper(
+            base_collator,
+            max_length=training_args.fixed_canvas_length,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
     trainer = dllm.core.trainers.MDLMTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -303,16 +325,7 @@ def train():
         eval_dataset=dataset["test"],
         args=training_args,
         callbacks=callbacks,
-        data_collator=dllm.utils.NoAttentionMaskWrapper(
-            transformers.DataCollatorForSeq2Seq(
-                tokenizer,
-                return_tensors="pt",
-                padding=True,
-                # pad_token_id is aliased to eos_token_id above, so padded
-                # labels match the sampler's canvas background token too.
-                label_pad_token_id=tokenizer.pad_token_id,
-            )
-        ),
+        data_collator=dllm.utils.NoAttentionMaskWrapper(base_collator),
     )
     trainer.train()
 

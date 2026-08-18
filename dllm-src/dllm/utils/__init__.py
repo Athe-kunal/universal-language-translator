@@ -12,6 +12,7 @@ from .chat import (
 )
 from .collators import (
     CollatorWrapper,
+    FixedCanvasPaddingWrapper,
     NoAttentionMaskWrapper,
     PrependBOSWrapper,
     RandomTruncateWrapper,
@@ -66,6 +67,7 @@ __all__ = [
     "visualize_histories",
     # collators
     "CollatorWrapper",
+    "FixedCanvasPaddingWrapper",
     "NoAttentionMaskWrapper",
     "PrependBOSWrapper",
     "RandomTruncateWrapper",
