@@ -2,7 +2,7 @@
 # adaptation stage needed) on BPCC English->Hindi pairs.
 #
 # Run scripts/check_llada_tokenizer.py FIRST — this whole config is only
-# worth running if that check passes. See docs/llada-moe-en-hi-finetuning.md.
+# worth running if that check passes.
 #
 # LLaDAMoEModelLM is registered locally in dllm-src under AutoModelForMaskedLM
 # (dllm-src/dllm/pipelines/llada/models/__init__.py), so train_translation.py
@@ -10,17 +10,15 @@
 # - no dFactory/VeOmni dependency required.
 #
 # 7B resident params (1B active/token) mean this does not fit plain DDP.
-# Launch with the FSDP2 accelerate config, e.g.:
-#   make train CONFIG=configs/llada_moe_bpcc_translation_config.yaml \
-#     ACCEL_CFG=dllm-src/scripts/accelerate_configs/fsdp2.yaml GPUS=2 GPU_IDS=0,1
+# Launch with: make llada-moe-train-bpcc (FSDP2, 2 GPUs)
 model:
   model_name_or_path: "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
   dtype: "bfloat16"
   attn_implementation: null
   # Full fine-tune is tight-but-plausible on 2xA100-80GB under FSDP2 with
-  # gradient checkpointing (see docs/llada-moe-en-hi-finetuning.md). If it
-  # OOMs, flip this to true rather than fighting batch size further - LoRA is
-  # already wired generically via dllm.utils.get_model/load_peft.
+  # gradient checkpointing. If it OOMs, flip this to true rather than
+  # fighting batch size further - LoRA is already wired generically via
+  # dllm.utils.get_model/load_peft.
   lora: false
 
 data:
@@ -36,7 +34,7 @@ data:
 
 training:
   output_dir: ".models/llada-moe-bpcc-translation"
-  num_train_epochs: 3
+  num_train_epochs: 5
   # Small per-device batch: 7B resident params + FSDP2-sharded optimizer
   # state leaves little headroom for activations. Raise gradient_accumulation
   # instead of per_device_train_batch_size if you need a larger effective

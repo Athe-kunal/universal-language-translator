@@ -1,10 +1,10 @@
 """Gate check: does LLaDA-MoE-7B-A1B-Instruct's tokenizer handle Devanagari as
 real subwords, or fall back to byte-level encoding?
 
-The whole LLaDA-MoE fine-tuning plan (docs/llada-moe-en-hi-finetuning.md)
-hinges on this. Roughly 8-12 tokens for the sentence below means real
-Devanagari subwords. Thirty-plus means byte fallback (the SMDM trap) and the
-plan needs rethinking before any training runs.
+The whole LLaDA-MoE fine-tuning plan hinges on this. Roughly 8-12 tokens for
+the sentence below means real Devanagari subwords. Thirty-plus means byte
+fallback (the SMDM trap) and the plan needs rethinking before any training
+runs.
 
 Usage:
     uv run python scripts/check_llada_tokenizer.py
@@ -58,7 +58,7 @@ def main() -> None:
     else:
         print(
             f"FAIL  avg {avg:.1f} tokens/sentence — looks like byte-level fallback. "
-            "The LLaDA-MoE plan needs rethinking (see docs/llada-moe-en-hi-finetuning.md)."
+            "The LLaDA-MoE plan needs rethinking."
         )
 
 
