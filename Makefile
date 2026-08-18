@@ -38,4 +38,20 @@ adapt-mmbert:
 		--per_device_eval_batch_size 16 \
 		--output_dir "$(ADAPT_OUTPUT_DIR)"
 
-.PHONY: train translate adapt-mmbert
+# LLaDA-MoE-7B-A1B-Instruct fine-tune on BPCC. Already a diffusion LM, so no
+# adaptation stage - but 7B resident params need FSDP2, not plain DDP.
+LLADA_CONFIG    ?= configs/llada_moe_bpcc_translation_config.yaml
+LLADA_ACCEL_CFG ?= dllm-src/scripts/accelerate_configs/fsdp2.yaml
+LLADA_GPUS      ?= 2
+LLADA_GPU_IDS   ?= $(GPU_IDS)
+
+check-llada-tokenizer:
+	uv run python scripts/check_llada_tokenizer.py
+
+llada-moe-train-bpcc:
+	$(if $(LLADA_GPU_IDS),CUDA_VISIBLE_DEVICES=$(LLADA_GPU_IDS)) uv run accelerate launch \
+		--config_file $(LLADA_ACCEL_CFG) \
+		--num_processes $(LLADA_GPUS) \
+		train_translation.py --config $(LLADA_CONFIG)
+
+.PHONY: train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc
