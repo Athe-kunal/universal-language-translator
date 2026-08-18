@@ -128,6 +128,57 @@ class PrependBOSWrapper(CollatorWrapper):
 
 
 @dataclass
+class FixedCanvasPaddingWrapper(CollatorWrapper):
+    """
+    Collator wrapper that extends a dynamically-padded batch out to a fixed
+    canvas width, padding input_ids/attention_mask/labels with EOS rather
+    than leaving them at the batch's own max length.
+
+    Wrap a collator that already pads within the batch (e.g.
+    `DataCollatorForSeq2Seq(padding=True)`); this wrapper only adds the
+    extra tail once the batch is shorter than `max_length`.
+
+    Padded labels are set to `eos_token_id` (not -100), so the padded tail
+    stays in the loss. Training then asks the model to predict EOS across a
+    long trailing span, matching the fixed-width canvas the MDLM sampler
+    builds at inference (`prompt_len : prompt_len + max_new_tokens`) instead
+    of leaving that span with no training signal.
+    """
+
+    max_length: int = 512
+    eos_token_id: int | None = None
+
+    def after(self, outputs):
+        assert self.eos_token_id is not None, "eos_token_id must be provided"
+        input_ids = outputs["input_ids"]
+        bsz, cur_len = input_ids.shape
+        pad_len = self.max_length - cur_len
+        if pad_len <= 0:
+            return outputs
+
+        pad_ids = torch.full(
+            (bsz, pad_len), self.eos_token_id, dtype=input_ids.dtype, device=input_ids.device
+        )
+        outputs["input_ids"] = torch.cat([input_ids, pad_ids], dim=1)
+
+        labels = outputs.get("labels")
+        if labels is not None:
+            pad_labels = torch.full(
+                (bsz, pad_len), self.eos_token_id, dtype=labels.dtype, device=labels.device
+            )
+            outputs["labels"] = torch.cat([labels, pad_labels], dim=1)
+
+        attention_mask = outputs.get("attention_mask")
+        if attention_mask is not None:
+            pad_attention = torch.ones(
+                (bsz, pad_len), dtype=attention_mask.dtype, device=attention_mask.device
+            )
+            outputs["attention_mask"] = torch.cat([attention_mask, pad_attention], dim=1)
+
+        return outputs
+
+
+@dataclass
 class RandomTruncateWrapper(CollatorWrapper):
     """
     Collator wrapper that randomly truncates sequences *logically* during training

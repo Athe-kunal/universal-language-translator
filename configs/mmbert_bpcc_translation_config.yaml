@@ -1,5 +1,11 @@
 model:
-  model_name_or_path: "jhu-clsp/mmBERT-base"
+  # Run `make adapt-mmbert` first to produce this checkpoint (BERT->diffusion
+  # continual-pretraining adaptation, mirroring the recipe that produced
+  # dllm-hub/ModernBERT-base-chat-v0.1). Fine-tuning raw jhu-clsp/mmBERT-base
+  # directly on BPCC skips that adaptation: mmBERT's decay phase only used a
+  # 5% mask rate, so denoising from 100% masked at generation time is far
+  # outside its training distribution and collapses into repetition.
+  model_name_or_path: ".models/mmbert-diffusion-adapted/checkpoint-final"
   dtype: "bfloat16"
   attn_implementation: null
   lora: false
@@ -19,16 +25,26 @@ training:
   num_train_epochs: 10
   per_device_train_batch_size: 32
   per_device_eval_batch_size: 64
-  learning_rate: 1.0e-4
+  learning_rate: 3.0e-5
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.1
   weight_decay: 0.01
   gradient_accumulation_steps: 1
   bf16: true
-  group_by_length: true
+  # group_by_length batches similar-length examples together specifically to
+  # minimize padding, which starves the model of long-EOS-tail examples. Off
+  # so every batch gets padded out to fixed_canvas_length below instead.
+  group_by_length: false
+  # Fixed diffusion-canvas width (padded with EOS, kept in the loss) so the
+  # model is actually trained to predict EOS across a long trailing span —
+  # matching the fixed max_new_tokens canvas MDLMSampler builds at inference.
+  fixed_canvas_length: 128
   eval_strategy: "epoch"
-  save_strategy: "epoch"
-  save_total_limit: 3
+  # Step-based saves for this diagnostic run: epoch-only checkpoints can
+  # skip past an early collapse with nothing pre-collapse to inspect.
+  save_strategy: "steps"
+  save_steps: 200
+  save_total_limit: 5
   logging_steps: 20
   seed: 42
   report_to: "none"
