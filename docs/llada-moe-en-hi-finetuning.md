@@ -44,33 +44,53 @@ configs/sft/llada2_mini_bd_sft.yaml
 configs/sft/llada2_mini_bd_with_dparallel_sft.yaml
 ```
 
-There is **no shipped config for LLaDA-MoE-7B-A1B**. Same lineage, different
-model. Two options:
+There is **no shipped config for LLaDA-MoE-7B-A1B**, and — checked against the
+actual dFactory source (`inclusionAI/dfactory`, commit `a385b14`) — it is
+**not** the same family as `llada2_mini`/`llada2_flash` at the code level.
+dFactory ships `LLaDA2MoeConfig` (`model_type="llada2_moe_veomni"`, fields like
+`moe_intermediate_size`, `n_group`, `first_k_dense_replace`) with its own
+`modeling_llada2_moe.py`. LLaDA-MoE-7B-A1B-Instruct is the older **LLaDA MoE**
+architecture — `LLaDAMoEConfig` (`model_type="lladamoe"`, fields like
+`expert_intermediate_size`, `shared_expert_intermediate_size`,
+`router_num_group`) with different modeling code entirely. Pointing dFactory's
+`llada2_mini` config or `scripts/moe_convertor.py` at an LLaDA-MoE-7B-A1B
+checkpoint fails at load — the config schema and weight-key layout don't
+match. "Same lineage" was wrong; it's "same publisher, different generation."
 
-1. **Adapt the `llada2_mini` config** to LLaDA-MoE-7B-A1B — same MoE family, so
-   the expert-merging and parallelism machinery applies; you're editing
-   dimensions and paths, not writing infrastructure.
-2. **Use LLaDA2.0-mini (16B) instead.** Config works out of the box, model is
-   stronger. But 16B on 2×A100 means LoRA or offloading rather than full
-   fine-tuning.
+**This repo's `dllm-src` already vendors the correct architecture directly**
+(`dllm-src/dllm/pipelines/llada/models/modeling_lladamoe.py` +
+`configuration_lladamoe.py`), registered under `AutoModelForMaskedLM`
+(`dllm-src/dllm/pipelines/llada/models/__init__.py`). That means
+`train_translation.py` — the exact script that already trained mmBERT here —
+can load and fine-tune LLaDA-MoE-7B-A1B-Instruct as-is, with no
+dFactory/VeOmni dependency, no expert merge/split step, and no BERT→diffusion
+adaptation stage. Use:
 
-Recommendation: start with option 1. Full fine-tuning of a 7B-resident model on
-2×A100 is tight but plausible; 16B is not, and LoRA on a diffusion LM is less
-well-trodden ground than you want underneath you while also debugging a data
-pipeline.
+- `scripts/check_llada_tokenizer.py` — the Devanagari gate check below, as a
+  runnable script.
+- `configs/llada_moe_bpcc_translation_config.yaml` — training config wired to
+  `bpcc_hin_deva.jsonl` via the existing flat-format loader.
+- `make check-llada-tokenizer` then `make train-llada-moe` (FSDP2 by default —
+  7B resident params don't fit plain DDP on 2×A100).
+
+dFactory remains worth revisiting only if the LLaDA2.0-mini path (16B, option 2
+below) becomes the priority, since that's the model family it actually ships
+configs for.
 
 Either way, **run the Devanagari tokenizer check first** — this gates everything
 downstream:
 
-```python
-from transformers import AutoTokenizer
-tok = AutoTokenizer.from_pretrained("inclusionAI/LLaDA-MoE-7B-A1B-Instruct")
-print(len(tok.encode("यह एक परीक्षण वाक्य है।")))
+```bash
+uv run python scripts/check_llada_tokenizer.py
 ```
 
 Roughly 8–12 tokens means real Devanagari subwords. Thirty-plus means byte
 fallback — the SMDM trap again, and the whole plan needs rethinking. MoE routing
 does not guarantee Hindi got attention during pretraining.
+
+The rest of this section (dFactory's own pipeline: expert merge, dataset
+format, `train.sh`) describes the **LLaDA2.0-mini path**, not the
+LLaDA-MoE-7B-A1B path above. Keep it for option 2.
 
 ---
 
@@ -167,25 +187,33 @@ against, so the conceptual work transfers even where the code doesn't.
 
 Note also that ML-GSAI's LLaDA repo states SFT differs from a standard
 autoregressive trainer by only a few lines, with guidelines in `GUIDELINES.md`.
-If dFactory's VeOmni dependency proves heavy, adapting your existing
-`train_translation.py` is a legitimate fallback — you would lose expert
-parallelism, which may or may not bite depending on how the memory maths lands.
+
+Update: for LLaDA-MoE-7B-A1B specifically, this "fallback" is now the primary
+path, not a hedge — dFactory has no working path to that architecture at all
+(see the corrected note in Model choice above), while `train_translation.py`
++ `dllm-src` already loads and trains it natively. You lose expert
+parallelism (plain FSDP2 sharding instead), which is the real risk on 2×A100 —
+watch for OOM and drop to LoRA (`lora: true` in
+`configs/llada_moe_bpcc_translation_config.yaml`) if it bites.
 
 ---
 
 ## Suggested order
 
-1. Devanagari tokenizer check on LLaDA-MoE-7B-A1B-Instruct. **Gate on this.**
-2. Install dFactory with the VeOmni submodule; download and merge.
-3. Zero-shot En→Hi on a handful of chunks before any training — establishes the
-   baseline and confirms the tokenizer conclusion in practice.
-4. Convert a small BPCC slice to conversational format; overfit a few hundred
-   pairs to prove the loop end-to-end.
-5. Write the model config for 7B-A1B off `llada2_mini`.
-6. Full BPCC warm-start, then specialize on the synthetic CoT pairs.
-7. Head-to-head against batched Gemma 3 12B under vLLM — quality *and* tokens/sec.
+1. `make check-llada-tokenizer` (wraps `scripts/check_llada_tokenizer.py`) on
+   LLaDA-MoE-7B-A1B-Instruct. **Gate on this.**
+2. Zero-shot En→Hi on a handful of chunks before any training — establishes the
+   baseline and confirms the tokenizer conclusion in practice. (`validate.py`
+   against the base checkpoint, no training config needed yet.)
+3. Overfit a few hundred BPCC pairs with
+   `configs/llada_moe_bpcc_translation_config.yaml` (small `max_steps`, no eval)
+   to prove the loop end-to-end.
+4. Full BPCC warm-start via `make train-llada-moe`, then specialize on the
+   synthetic CoT pairs (swap `data.jsonl_path`/`dataset_format` back to the
+   chunked format for that stage).
+5. Head-to-head against batched Gemma 3 12B under vLLM — quality *and* tokens/sec.
 
-Step 3 is the cheap one that could save the most time. An instruct model with
+Step 2 is the cheap one that could save the most time. An instruct model with
 real Devanagari coverage may already translate acceptably, which would reframe
 the project from "train a translator" to "make an existing one fast and cheap."
 
