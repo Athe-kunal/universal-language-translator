@@ -9,6 +9,34 @@ from dllm.utils.configs import ModelArguments, TrainingArguments
 from dllm.utils.utils import disable_caching_allocator_warmup, load_peft, print_main
 
 
+def _resolve_mislabeled_lladamoe_config(
+    model_name_or_path: str | None,
+) -> "transformers.PretrainedConfig | None":
+    """
+    Some inclusionAI LLaDA-MoE checkpoints (e.g. LLaDA-MoE-7B-A1B-Instruct) ship a
+    config.json with "model_type": "llada", even though the architecture is the MoE
+    variant. That string collides with dllm's locally-registered dense LLaDAConfig,
+    so AutoConfig/AutoModel dispatch instantiate the wrong config class and crash on
+    the read-only `hidden_size` property. Detect the mislabeled checkpoint by its
+    MoE-only fields (absent from dense LLaDA configs) and build the correct
+    LLaDAMoEConfig directly, bypassing the model_type string lookup entirely.
+    """
+    if not model_name_or_path:
+        return None
+    try:
+        config_dict, _ = transformers.PretrainedConfig.get_config_dict(
+            model_name_or_path
+        )
+    except Exception:
+        return None
+    if config_dict.get("model_type") != "llada" or "num_experts" not in config_dict:
+        return None
+
+    from dllm.pipelines.llada.models import LLaDAMoEConfig
+
+    return LLaDAMoEConfig.from_pretrained(model_name_or_path)
+
+
 def get_model(
     model_args: ModelArguments | None = None,
     config: transformers.PretrainedConfig | None = None,
@@ -59,7 +87,7 @@ def get_model(
         "device_map": device_map,
         "quantization_config": quant_config,
         "attn_implementation": attn_implementation,
-        "config": config,
+        "config": config or _resolve_mislabeled_lladamoe_config(model_name_or_path),
     }
 
     try:
@@ -131,7 +159,8 @@ def get_tokenizer(
         tokenizer.bos_token = tokenizer.pad_token
 
     # If model is not provided, return as-is
-    model_cfg = transformers.AutoConfig.from_pretrained(model_name_or_path)
+    moe_cfg = _resolve_mislabeled_lladamoe_config(model_name_or_path)
+    model_cfg = moe_cfg or transformers.AutoConfig.from_pretrained(model_name_or_path)
     model_cls = transformers.AutoModel._model_mapping[type(model_cfg)]
 
     # ---------------- Model-specific customization ----------------
