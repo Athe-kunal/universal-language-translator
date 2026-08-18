@@ -54,4 +54,22 @@ llada-moe-train-bpcc:
 		--num_processes $(LLADA_GPUS) \
 		train_translation.py --config $(LLADA_CONFIG)
 
-.PHONY: train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc
+# AR -> diffusion conversion for Llama-3.2-1B-Instruct via dllm's A2D
+# pipeline (dllm-src/dllm/pipelines/a2d/convert.py). This only transplants
+# the AR checkpoint's weights into the non-causal A2D architecture (single
+# process, no accelerate launch needed) - the result is not yet a working
+# diffusion model. It still needs continual-pretraining ("warmup") and SFT
+# afterward, same as adapt-mmbert does for the BERT path.
+#
+# Llama 3.2's 1B/3B sizes are distilled/pruned from the 8B/70B rather than
+# pretrained fresh, so treat this as a cheap smoke test of the A2D pipeline
+# and the Hindi tokenizer, not a stand-in for converting the 8B checkpoint.
+A2D_MODEL      ?= meta-llama/Llama-3.2-1B-Instruct
+A2D_OUTPUT_DIR ?= .models/a2d/Llama-3.2-1B-Instruct
+
+convert-llama-a2d:
+	uv run python dllm-src/dllm/pipelines/a2d/convert.py \
+		--model-name-or-path "$(A2D_MODEL)" \
+		--output-dir "$(A2D_OUTPUT_DIR)"
+
+.PHONY: train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d
