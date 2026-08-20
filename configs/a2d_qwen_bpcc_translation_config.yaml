@@ -1,21 +1,25 @@
-# SFT the A2D-converted Qwen2.5-1.5B-Instruct checkpoint on BPCC
+# SFT the warmed-up A2D-converted Qwen2.5-1.5B-Instruct checkpoint on BPCC
 # English->Hindi pairs with MDLM.
 #
-# Run `make convert-a2d` first to produce this checkpoint (AR->diffusion
-# weight transplant into the non-causal A2D architecture). A2DQwen2Config is
-# registered under AutoModelForMaskedLM (see
+# Run, in order:
+#   1. make convert-a2d  (AR->diffusion weight transplant, non-causal arch)
+#   2. make a2d-warmup   (continual pretraining so it learns to denoise from
+#                         a fully-masked canvas - see
+#                         dllm-src/examples/a2d/mdlm/pt.py and
+#                         dllm-src/examples/a2d/README.md)
+#   3. make a2d-train-bpcc  (this config)
+#
+# A2DQwen2Config is registered under AutoModelForMaskedLM (see
 # dllm-src/dllm/pipelines/a2d/models/qwen2/modeling_qwen2.py), so
 # train_translation.py loads and trains it exactly like the mmBERT/LLaDA-MoE
 # configs in this repo.
 #
-# NOTE: convert-a2d only transplants weights - it has not been warmed up to
-# denoise from a fully-masked canvas the way adapt-mmbert warms up mmBERT
-# before mmbert_bpcc_translation_config.yaml fine-tunes it. This config SFTs
-# the raw transplant directly. If quality collapses, add a continual-
-# pretraining warmup stage first (see dllm-src/examples/a2d/mdlm/pt.py and
-# dllm-src/examples/a2d/README.md).
+# NOTE: SFTing convert-a2d's raw transplant directly (skipping step 2) was
+# tried and produced garbled, ungrammatical Hindi even at higher sampling
+# temperature - see a2d_qwen_bpcc_validation_results.txt for the validation
+# transcript. Do not skip the warmup stage.
 model:
-  model_name_or_path: ".models/a2d/Qwen2.5-1.5B-Instruct"
+  model_name_or_path: ".models/a2d/Qwen2.5-1.5B-Instruct/mdlm/warmup/checkpoint-final"
   dtype: "bfloat16"
   attn_implementation: null
   lora: false
@@ -32,7 +36,7 @@ data:
 
 training:
   output_dir: ".models/a2d-qwen-bpcc-translation"
-  num_train_epochs: 2
+  num_train_epochs: 1
   per_device_train_batch_size: 16
   per_device_eval_batch_size: 32
   learning_rate: 3.0e-5

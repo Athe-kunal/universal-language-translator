@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n", type=int, default=20)
     parser.add_argument("--out", default="bpcc_validation_sample.jsonl")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--remasking", default="low_confidence")
     args = parser.parse_args()
 
     print(f"Rebuilding held-out split from {args.jsonl_path} "
@@ -59,7 +61,12 @@ def main() -> None:
     predictions = []
     for src in sources:
         max_new_tokens = estimate_max_new_tokens([src], tokenizer)
-        config = SamplerConfig(max_new_tokens=max_new_tokens, steps=max_new_tokens)
+        config = SamplerConfig(
+            max_new_tokens=max_new_tokens,
+            steps=max_new_tokens,
+            temperature=args.temperature,
+            remasking=args.remasking,
+        )
         predictions.append(translate_batch([src], tokenizer, sampler, config)[0])
 
     out = Path(args.out)

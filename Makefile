@@ -72,10 +72,35 @@ convert-a2d:
 		--model-name-or-path "$(A2D_MODEL)" \
 		--output-dir "$(A2D_OUTPUT_DIR)"
 
-# SFT the A2D-converted checkpoint (from convert-a2d, at A2D_OUTPUT_DIR) on
-# BPCC via train_translation.py - see configs/a2d_qwen_bpcc_translation_config.yaml
-# for why this reuses the same trainer as the mmBERT/LLaDA-MoE BPCC configs,
-# and the caveat about skipping a continual-pretraining warmup stage.
+# convert-a2d only transplants AR weights into the non-causal A2D
+# architecture - it has never learned to denoise from a fully-masked canvas.
+# Warm it up with continual pretraining before BPCC SFT (same role as
+# adapt-mmbert for the BERT path; same dataset/hyperparams for consistency).
+# See dllm-src/examples/a2d/mdlm/pt.py and dllm-src/examples/a2d/README.md.
+# Validated empirically: SFTing straight off convert-a2d's raw transplant
+# (skipping this stage) produced garbled, ungrammatical Hindi even at higher
+# sampling temperature - see a2d_qwen_bpcc_validation_results.txt.
+A2D_WARMUP_OUTPUT_DIR ?= .models/a2d/Qwen2.5-1.5B-Instruct/mdlm/warmup
+
+a2d-warmup:
+	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
+		--config_file $(ACCEL_CFG) \
+		--num_processes $(GPUS) \
+		dllm-src/examples/a2d/mdlm/pt.py \
+		--model_name_or_path "$(A2D_OUTPUT_DIR)" \
+		--dataset_args "wikitext[name:wikitext-103-v1]" \
+		--text_field "text" \
+		--insert_eos True \
+		--max_length 512 \
+		--num_train_epochs 1 \
+		--learning_rate 1e-4 \
+		--per_device_train_batch_size 16 \
+		--per_device_eval_batch_size 16 \
+		--output_dir "$(A2D_WARMUP_OUTPUT_DIR)"
+
+# SFT the warmed-up checkpoint (from a2d-warmup) on BPCC via
+# train_translation.py - see configs/a2d_qwen_bpcc_translation_config.yaml
+# for why this reuses the same trainer as the mmBERT/LLaDA-MoE BPCC configs.
 A2D_TRAIN_CONFIG ?= configs/a2d_qwen_bpcc_translation_config.yaml
 
 a2d-train-bpcc:
@@ -84,4 +109,4 @@ a2d-train-bpcc:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(A2D_TRAIN_CONFIG)
 
-.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-train-bpcc
+.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc
