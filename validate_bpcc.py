@@ -14,8 +14,9 @@ from pathlib import Path
 
 from train_translation import load_flat_translation_dataset
 from translate import (
+    BD3LMSamplerConfig,
+    MDLMSamplerConfig,
     ScriptArguments,
-    SamplerConfig,
     estimate_max_new_tokens,
     load_pipeline,
     translate_batch,
@@ -35,6 +36,21 @@ def main() -> None:
     parser.add_argument("--out", default="bpcc_validation_sample.jsonl")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--remasking", default="low_confidence")
+    parser.add_argument(
+        "--sampler",
+        default="mdlm",
+        choices=["mdlm", "bd3lm"],
+        help="Must match how the checkpoint was trained (train_translation.py "
+        "--trainer) - a bd3lm checkpoint sampled with the mdlm sampler (or "
+        "vice versa) produces malformed output even though it loads fine.",
+    )
+    parser.add_argument(
+        "--block_size",
+        type=int,
+        default=32,
+        help="Only used when --sampler bd3lm; should match the block_size "
+        "the checkpoint was trained with.",
+    )
     args = parser.parse_args()
 
     print(f"Rebuilding held-out split from {args.jsonl_path} "
@@ -47,9 +63,9 @@ def main() -> None:
     examples = eval_set.select(range(n))
     print(f"Validation set has {len(eval_set)} examples — sampling first {n}")
 
-    print(f"Loading model from {args.checkpoint} ...")
+    print(f"Loading model from {args.checkpoint} (sampler={args.sampler}) ...")
     model_args = ScriptArguments(model_name_or_path=args.checkpoint)
-    _, tokenizer, sampler = load_pipeline(model_args)
+    _, tokenizer, sampler = load_pipeline(model_args, sampler_type=args.sampler)
 
     sources = [ex["messages"][0]["content"] for ex in examples]
     references = [ex["messages"][1]["content"] for ex in examples]
@@ -61,12 +77,21 @@ def main() -> None:
     predictions = []
     for src in sources:
         max_new_tokens = estimate_max_new_tokens([src], tokenizer)
-        config = SamplerConfig(
-            max_new_tokens=max_new_tokens,
-            steps=max_new_tokens,
-            temperature=args.temperature,
-            remasking=args.remasking,
-        )
+        if args.sampler == "bd3lm":
+            config = BD3LMSamplerConfig(
+                max_new_tokens=max_new_tokens,
+                steps=max_new_tokens,
+                temperature=args.temperature,
+                remasking=args.remasking,
+                block_size=args.block_size,
+            )
+        else:
+            config = MDLMSamplerConfig(
+                max_new_tokens=max_new_tokens,
+                steps=max_new_tokens,
+                temperature=args.temperature,
+                remasking=args.remasking,
+            )
         predictions.append(translate_batch([src], tokenizer, sampler, config)[0])
 
     out = Path(args.out)

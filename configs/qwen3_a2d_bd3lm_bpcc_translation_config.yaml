@@ -15,7 +15,8 @@ model:
 training:
   output_dir: ".models/qwen3-a2d-bd3lm-bpcc-translation"
   num_train_epochs: 2
-  per_device_train_batch_size: 32
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 2
   per_device_eval_batch_size: 64
   learning_rate: 3.0e-5
   report_to: "all"
