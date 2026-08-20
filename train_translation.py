@@ -115,9 +115,31 @@ class TrainingArguments(dllm.core.trainers.MDLMConfig):
 # Config loading
 # ---------------------------------------------------------------------------
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merges override into base, recursing into nested dicts (e.g. so a
+    child's `training:` section only needs the keys it changes, not a full
+    copy of the parent's)."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_yaml_config(path: str) -> dict:
+    """Loads a YAML config, resolving an optional top-level `extends: <path>`
+    (relative to this file's own directory) before applying this file's
+    sections on top - lets model-specific configs inherit shared BPCC/data
+    defaults instead of repeating them."""
     with open(path) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    extends = cfg.pop("extends", None)
+    if extends:
+        base_cfg = load_yaml_config(str(Path(path).parent / extends))
+        cfg = _deep_merge(base_cfg, cfg)
+    return cfg
 
 
 def yaml_to_argv(cfg: dict) -> list[str]:

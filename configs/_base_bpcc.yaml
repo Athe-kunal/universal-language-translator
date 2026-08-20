@@ -1,0 +1,40 @@
+# Shared defaults for BPCC (English<->Hindi, bpcc_hin_deva.jsonl) SFT
+# configs. Not meant to be passed to --config directly (no `model:` section).
+# Each concrete config does `extends: _base_bpcc.yaml` and only sets `model:`
+# plus whatever training/data keys differ for that model's size/architecture.
+data:
+  jsonl_path: "bpcc_hin_deva.jsonl"
+  dataset_format: "flat"
+  src_field: "src"
+  tgt_field: "tgt"
+  eval_split: 0.2
+  max_length: 512
+  mask_prompt_loss: true
+  num_proc: 4
+
+training:
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  bf16: true
+  # group_by_length batches similar-length examples together specifically to
+  # minimize padding, which starves the model of long-EOS-tail examples. Off
+  # so every batch gets padded out to fixed_canvas_length below instead.
+  group_by_length: false
+  # Fixed diffusion-canvas width (padded with EOS, kept in the loss) so the
+  # model is actually trained to predict EOS across a long trailing span -
+  # matching the fixed max_new_tokens canvas MDLMSampler builds at inference.
+  fixed_canvas_length: 128
+  eval_strategy: "epoch"
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 5
+  logging_steps: 20
+  seed: 42
+  report_to: "wandb"
+  wandb_project: "universal-language-translator"
+  # dllm MDLM-specific
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"

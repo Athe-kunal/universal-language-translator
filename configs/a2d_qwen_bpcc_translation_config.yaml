@@ -1,3 +1,5 @@
+extends: _base_bpcc.yaml
+
 # SFT the warmed-up A2D-converted Qwen2.5-1.5B-Instruct checkpoint on BPCC
 # English->Hindi pairs with MDLM.
 #
@@ -24,41 +26,12 @@ model:
   attn_implementation: null
   lora: false
 
-data:
-  jsonl_path: "bpcc_hin_deva.jsonl"
-  dataset_format: "flat"
-  src_field: "src"
-  tgt_field: "tgt"
-  eval_split: 0.2
-  max_length: 512
-  mask_prompt_loss: true
-  num_proc: 4
-
 training:
   output_dir: ".models/a2d-qwen-bpcc-translation"
   num_train_epochs: 1
   per_device_train_batch_size: 16
   per_device_eval_batch_size: 32
   learning_rate: 3.0e-5
-  lr_scheduler_type: "cosine"
-  warmup_ratio: 0.1
-  weight_decay: 0.01
-  gradient_accumulation_steps: 1
-  bf16: true
-  # group_by_length batches similar-length examples together specifically to
-  # minimize padding, which starves the model of long-EOS-tail examples. Off
-  # so every batch gets padded out to fixed_canvas_length below instead.
-  group_by_length: false
-  # Fixed diffusion-canvas width (padded with EOS, kept in the loss) so the
-  # model is actually trained to predict EOS across a long trailing span -
-  # matching the fixed max_new_tokens canvas MDLMSampler builds at inference.
-  fixed_canvas_length: 128
-  eval_strategy: "epoch"
-  save_strategy: "steps"
-  save_steps: 500
-  save_total_limit: 5
-  logging_steps: 20
-  seed: 42
   # "all" (not "wandb,tensorboard" - yaml_to_argv flattens this field with
   # str(v) into a single CLI token, so it must stay a plain string) expands
   # to every installed reporting integration (transformers.TrainingArguments
@@ -66,8 +39,3 @@ training:
   # wandb + tensorboard. TensorBoard logs land under output_dir/runs/ - view
   # with `tensorboard --logdir .models/a2d-qwen-bpcc-translation/runs`.
   report_to: "all"
-  wandb_project: "universal-language-translator"
-  # dllm MDLM-specific
-  time_epsilon: 1.0e-3
-  loss_weight_type: "uniform"
-  loss_norm_type: "token"

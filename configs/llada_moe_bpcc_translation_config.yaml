@@ -1,3 +1,5 @@
+extends: _base_bpcc.yaml
+
 # Fine-tune LLaDA-MoE-7B-A1B-Instruct (native diffusion LM, no BERT->diffusion
 # adaptation stage needed) on BPCC English->Hindi pairs.
 #
@@ -22,15 +24,8 @@ model:
   lora: false
 
 data:
-  jsonl_path: "bpcc_hin_deva.jsonl"
-  dataset_format: "flat"
-  src_field: "src"
-  tgt_field: "tgt"
   eval_split: 0.02
-  max_length: 512
   max_token_length: 2048
-  mask_prompt_loss: true
-  num_proc: 4
 
 training:
   output_dir: ".models/llada-moe-bpcc-translation"
@@ -44,26 +39,4 @@ training:
   gradient_accumulation_steps: 8
   gradient_checkpointing: true
   learning_rate: 1.0e-5
-  lr_scheduler_type: "cosine"
   warmup_ratio: 0.03
-  weight_decay: 0.01
-  bf16: true
-  group_by_length: false
-  # Fixed diffusion-canvas width (padded with EOS, kept in the loss) so the
-  # model is trained to predict EOS/eot across a long trailing span, matching
-  # the fixed max_new_tokens canvas the sampler builds at inference. Verify
-  # this against scripts/check_llada_tokenizer.py output and adjust if BPCC
-  # Hindi chunks tokenize longer/shorter than expected.
-  fixed_canvas_length: 128
-  eval_strategy: "epoch"
-  save_strategy: "steps"
-  save_steps: 500
-  save_total_limit: 5
-  logging_steps: 20
-  seed: 42
-  report_to: "wandb"
-  wandb_project: "universal-language-translator"
-  # dllm MDLM-specific
-  time_epsilon: 1.0e-3
-  loss_weight_type: "uniform"
-  loss_norm_type: "token"

@@ -1,0 +1,37 @@
+# Shared defaults for the translation_chunked.jsonl (math problem/solution
+# chunks) SFT configs. Not meant to be passed to --config directly (no
+# `model:` section). Each concrete config does
+# `extends: _base_chunked_translation.yaml` and only sets `model:` plus
+# whatever training keys differ for that model.
+data:
+  jsonl_path: "translation_chunked.jsonl"
+  max_length: 1024
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "question"
+      chunks_field: "problem_chunks"
+    - name: "solution"
+      chunks_field: "solution_chunks"
+
+training:
+  num_train_epochs: 3
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 64
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  gradient_accumulation_steps: 1
+  bf16: true
+  group_by_length: true
+  eval_strategy: "epoch"
+  save_strategy: "steps"
+  save_steps: 5000
+  save_total_limit: 5
+  logging_steps: 10
+  seed: 42
+  report_to: "wandb"
+  wandb_project: "universal-language-translator"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"
