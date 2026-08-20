@@ -35,6 +35,7 @@ dependencies = [
     "pysbd>=0.3.4",
     "lm-eval>=0.4.12",
     "trl>=0.29.1",
+    "tensorboard>=2.21.0",
 ]
 
 [dependency-groups]

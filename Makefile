@@ -1,7 +1,21 @@
 CONFIG     ?= configs/bpcc_translation_config.yaml
-GPUS       ?= 2
-GPU_IDS    ?= 2,3
+GPUS       ?= 1
+GPU_IDS    ?= 0
 ACCEL_CFG  ?= dllm-src/scripts/accelerate_configs/ddp.yaml
+
+# Downloads AI4Bharat's BPCC (English<->Hindi) hin_Deva split into
+# bpcc_hin_deva.jsonl - the dataset every *-bpcc-* train target above/below
+# reads via train_translation.py's --jsonl_path. Needs HF_API_KEY in .env for
+# gated configs; the default "bpcc-seed-latest" config is small and ungated.
+BPCC_CONFIG      ?= bpcc-seed-latest
+BPCC_OUTPUT_FILE ?= bpcc_hin_deva.jsonl
+
+dataset:
+	uv run python data_gen/download_bpcc.py \
+		--config "$(BPCC_CONFIG)" \
+		--output_file "$(BPCC_OUTPUT_FILE)"
+
+export CUDA_HOME ?= /home/ubuntu/.local/fake-cuda
 
 train:
 	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
@@ -14,11 +28,6 @@ MODEL ?= .models/modernbert-translation/checkpoint-final
 translate:
 	uv run python translate.py --model_name_or_path $(MODEL)
 
-# BERT -> diffusion continual-pretraining adaptation. Run this before
-# fine-tuning a raw (non-chat) BERT-style checkpoint like jhu-clsp/mmBERT-base
-# on a generation task — it teaches the model to denoise from a fully-masked
-# canvas, which SFT alone does not. Mirrors the recipe that produced
-# dllm-hub/ModernBERT-base-chat-v0.1 (see dllm-src/examples/bert/README.md).
 ADAPT_MODEL      ?= jhu-clsp/mmBERT-base
 ADAPT_OUTPUT_DIR ?= .models/mmbert-diffusion-adapted
 
@@ -54,22 +63,25 @@ llada-moe-train-bpcc:
 		--num_processes $(LLADA_GPUS) \
 		train_translation.py --config $(LLADA_CONFIG)
 
-# AR -> diffusion conversion for Llama-3.2-1B-Instruct via dllm's A2D
-# pipeline (dllm-src/dllm/pipelines/a2d/convert.py). This only transplants
-# the AR checkpoint's weights into the non-causal A2D architecture (single
-# process, no accelerate launch needed) - the result is not yet a working
-# diffusion model. It still needs continual-pretraining ("warmup") and SFT
-# afterward, same as adapt-mmbert does for the BERT path.
-#
-# Llama 3.2's 1B/3B sizes are distilled/pruned from the 8B/70B rather than
-# pretrained fresh, so treat this as a cheap smoke test of the A2D pipeline
-# and the Hindi tokenizer, not a stand-in for converting the 8B checkpoint.
-A2D_MODEL      ?= meta-llama/Llama-3.2-1B-Instruct
-A2D_OUTPUT_DIR ?= .models/a2d/Llama-3.2-1B-Instruct
 
-convert-llama-a2d:
+A2D_MODEL      ?= Qwen/Qwen2.5-1.5B-Instruct
+A2D_OUTPUT_DIR ?= .models/a2d/Qwen2.5-1.5B-Instruct
+
+convert-a2d:
 	uv run python dllm-src/dllm/pipelines/a2d/convert.py \
 		--model-name-or-path "$(A2D_MODEL)" \
 		--output-dir "$(A2D_OUTPUT_DIR)"
 
-.PHONY: train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d
+# SFT the A2D-converted checkpoint (from convert-a2d, at A2D_OUTPUT_DIR) on
+# BPCC via train_translation.py - see configs/a2d_qwen_bpcc_translation_config.yaml
+# for why this reuses the same trainer as the mmBERT/LLaDA-MoE BPCC configs,
+# and the caveat about skipping a continual-pretraining warmup stage.
+A2D_TRAIN_CONFIG ?= configs/a2d_qwen_bpcc_translation_config.yaml
+
+a2d-train-bpcc:
+	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
+		--config_file $(ACCEL_CFG) \
+		--num_processes $(GPUS) \
+		train_translation.py --config $(A2D_TRAIN_CONFIG)
+
+.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-train-bpcc
