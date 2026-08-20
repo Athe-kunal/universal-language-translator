@@ -90,7 +90,7 @@ class DataArguments(dllm.utils.DataArguments):
 
 
 @dataclass
-class TrainingArguments(dllm.core.trainers.MDLMConfig):
+class MDLMTrainingArguments(dllm.core.trainers.MDLMConfig):
     output_dir: str = ".models/modernbert-translation"
     num_train_epochs: int = 3
     per_device_train_batch_size: int = 4
@@ -109,6 +109,27 @@ class TrainingArguments(dllm.core.trainers.MDLMConfig):
     # inference (`max_new_tokens`). Set to 0 to disable and fall back to
     # ordinary dynamic batch-max padding.
     fixed_canvas_length: int = 128
+
+
+@dataclass
+class BD3LMTrainingArguments(dllm.core.trainers.BD3LMConfig):
+    output_dir: str = ".models/modernbert-translation"
+    num_train_epochs: int = 3
+    per_device_train_batch_size: int = 4
+    per_device_eval_batch_size: int = 4
+    learning_rate: float = 1e-4
+    group_by_length: bool = True
+    eval_strategy: str = "epoch"
+    save_strategy: str = "epoch"
+    logging_steps: int = 10
+    report_to: str = "wandb"
+    wandb_project: str = "universal-language-translator"
+    # Block-diffusion block size: sequence is split into blocks generated
+    # autoregressively (block by block, KV-cached like AR decoding), with
+    # masked diffusion denoising *within* each block. No fixed_canvas_length
+    # analog here - block boundaries, not a fixed trailing EOS span, are what
+    # BD3LMTrainer/AppendEOSBlockWrapper use to teach end-of-sequence.
+    block_size: int = 32
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +168,7 @@ def yaml_to_argv(cfg: dict) -> list[str]:
     argv = []
     for section in ("model", "data", "training"):
         for k, v in cfg.get(section, {}).items():
-            if k == "tasks":  # handled separately
+            if k in ("tasks", "trainer"):  # handled separately
                 continue
             if v is None:
                 continue
@@ -228,9 +249,14 @@ def load_flat_translation_dataset(
 # ---------------------------------------------------------------------------
 
 def train():
-    # --- Parse --config before HfArgumentParser so YAML provides defaults ---
+    # --- Parse --config/--trainer before HfArgumentParser so YAML provides
+    # defaults, and so we know which TrainingArguments dataclass to build
+    # (MDLM's fixed_canvas_length and BD3LM's block_size are mutually
+    # exclusive fields on two different dllm trainer configs, so the choice
+    # has to happen before HfArgumentParser is constructed, not after).
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)
+    pre.add_argument("--trainer", default=None, choices=["mdlm", "bd3lm"])
     known, remaining = pre.parse_known_args()
 
     yaml_argv: list[str] = []
@@ -238,16 +264,22 @@ def train():
         {"name": "question", "chunks_field": "problem_chunks"},
         {"name": "solution", "chunks_field": "solution_chunks"},
     ]
+    trainer_type = known.trainer
     if known.config:
         cfg = load_yaml_config(known.config)
         yaml_argv = yaml_to_argv(cfg)
         tasks = cfg.get("data", {}).get("tasks", tasks)
+        trainer_type = trainer_type or cfg.get("training", {}).get("trainer")
+    trainer_type = trainer_type or "mdlm"
 
     # YAML values act as defaults; CLI flags (remaining) override them.
     argv = yaml_argv + remaining
 
+    training_args_cls = (
+        BD3LMTrainingArguments if trainer_type == "bd3lm" else MDLMTrainingArguments
+    )
     parser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, TrainingArguments)
+        (ModelArguments, DataArguments, training_args_cls)
     )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses(
         args=argv, look_for_args_file=False
@@ -333,21 +365,30 @@ def train():
         # labels match the sampler's canvas background token too.
         label_pad_token_id=tokenizer.pad_token_id,
     )
-    if training_args.fixed_canvas_length > 0:
-        base_collator = dllm.utils.FixedCanvasPaddingWrapper(
-            base_collator,
-            max_length=training_args.fixed_canvas_length,
-            eos_token_id=tokenizer.eos_token_id,
-        )
 
-    trainer = dllm.core.trainers.MDLMTrainer(
+    if trainer_type == "bd3lm":
+        trainer_cls = dllm.core.trainers.BD3LMTrainer
+        data_collator = dllm.core.trainers.bd3lm.AppendEOSBlockWrapper(
+            base_collator, block_size=training_args.block_size
+        )
+    else:
+        if training_args.fixed_canvas_length > 0:
+            base_collator = dllm.utils.FixedCanvasPaddingWrapper(
+                base_collator,
+                max_length=training_args.fixed_canvas_length,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        trainer_cls = dllm.core.trainers.MDLMTrainer
+        data_collator = dllm.utils.NoAttentionMaskWrapper(base_collator)
+
+    trainer = trainer_cls(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
         args=training_args,
         callbacks=callbacks,
-        data_collator=dllm.utils.NoAttentionMaskWrapper(base_collator),
+        data_collator=data_collator,
     )
     trainer.train()
 

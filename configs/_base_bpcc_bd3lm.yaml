@@ -1,0 +1,40 @@
+# Shared defaults for BD3LM (block diffusion) BPCC SFT configs - the
+# BD3LMTrainer/BD3LMConfig counterpart to _base_bpcc.yaml. Not meant to be
+# passed to --config directly (no `model:` section).
+#
+# Differs from _base_bpcc.yaml only in: `trainer: "bd3lm"` + `block_size`
+# (BD3LM's block-diffusion equivalent of MDLM's fixed_canvas_length -
+# BD3LMConfig has no fixed_canvas_length field, so it's omitted here rather
+# than inherited, which is why this isn't itself `extends: _base_bpcc.yaml`).
+# See train_translation.py's --trainer/BD3LMTrainingArguments selection.
+data:
+  jsonl_path: "bpcc_hin_deva.jsonl"
+  dataset_format: "flat"
+  src_field: "src"
+  tgt_field: "tgt"
+  eval_split: 0.2
+  max_length: 512
+  mask_prompt_loss: true
+  num_proc: 4
+
+training:
+  trainer: "bd3lm"
+  block_size: 32
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  bf16: true
+  group_by_length: false
+  eval_strategy: "epoch"
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 5
+  logging_steps: 20
+  seed: 42
+  report_to: "wandb"
+  wandb_project: "universal-language-translator"
+  # dllm MDLM-specific (BD3LMConfig extends MDLMConfig, so these carry over)
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"

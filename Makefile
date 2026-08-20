@@ -121,4 +121,16 @@ qwen3-a2d-train-bpcc:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(QWEN3_A2D_TRAIN_CONFIG)
 
-.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc
+# BD3LM (block diffusion) counterpart to qwen3-a2d-train-bpcc, for a direct
+# MDLM-vs-BD3LM comparison on the same base checkpoint family + BPCC data.
+# train_translation.py picks BD3LMTrainer/BD3LMConfig automatically from this
+# config's `training.trainer: bd3lm` (see configs/_base_bpcc_bd3lm.yaml).
+QWEN3_A2D_BD3LM_TRAIN_CONFIG ?= configs/qwen3_a2d_bd3lm_bpcc_translation_config.yaml
+
+qwen3-a2d-bd3lm-train-bpcc:
+	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
+		--config_file $(ACCEL_CFG) \
+		--num_processes $(GPUS) \
+		train_translation.py --config $(QWEN3_A2D_BD3LM_TRAIN_CONFIG)
+
+.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc
