@@ -94,8 +94,8 @@ a2d-warmup:
 		--max_length 512 \
 		--num_train_epochs 1 \
 		--learning_rate 1e-4 \
-		--per_device_train_batch_size 16 \
-		--per_device_eval_batch_size 16 \
+		--per_device_train_batch_size 32 \
+		--per_device_eval_batch_size 32 \
 		--output_dir "$(A2D_WARMUP_OUTPUT_DIR)"
 
 # SFT the warmed-up checkpoint (from a2d-warmup) on BPCC via
@@ -109,4 +109,16 @@ a2d-train-bpcc:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(A2D_TRAIN_CONFIG)
 
-.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc
+# Fast baseline: SFT dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1 (already fully
+# warmed - no convert-a2d/a2d-warmup needed) on BPCC directly from the Hub.
+# See configs/qwen3_a2d_bpcc_translation_config.yaml for the tradeoffs vs.
+# the from-scratch Qwen2.5-1.5B a2d-warmup path above.
+QWEN3_A2D_TRAIN_CONFIG ?= configs/qwen3_a2d_bpcc_translation_config.yaml
+
+qwen3-a2d-train-bpcc:
+	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
+		--config_file $(ACCEL_CFG) \
+		--num_processes $(GPUS) \
+		train_translation.py --config $(QWEN3_A2D_TRAIN_CONFIG)
+
+.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc

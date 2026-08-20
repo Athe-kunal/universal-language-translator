@@ -1,0 +1,66 @@
+# Fast baseline: SFT dllm-hub's already-warmed Qwen3-0.6B-diffusion-mdlm-v0.1
+# on BPCC English->Hindi pairs, skipping convert-a2d/a2d-warmup entirely.
+#
+# This checkpoint was built with the same dllm library/pipeline this repo
+# uses (convert.py -> pt.py warmup -> sft.py, all under
+# dllm-src/examples/a2d/mdlm/ - see dllm-src/examples/a2d/README.md), so it
+# loads via dllm.utils.get_model() with no adapter work, same as any other
+# checkpoint in this repo. Loaded straight from the Hub - no local
+# conversion/warmup needed.
+#
+# Tradeoffs vs. our own convert-a2d+a2d-warmup path on Qwen2.5-1.5B-Instruct:
+#   - Smaller (0.8B vs 1.5B) -> lower capacity ceiling.
+#   - Its warmup+SFT were on English/code data (tulu-3-sft-mixture,
+#     smoltalk, OpenCoder), not Hindi-directed - Hindi capability post-warmup
+#     is unverified, though the Qwen3 base does list Hindi among its
+#     supported languages.
+#   - But it's fully pre-warmed (unlike our raw convert-a2d transplant,
+#     which produced garbled Hindi per a2d_qwen_bpcc_validation_results.txt)
+#     and needs no GPU-hours spent warming up before this SFT can start.
+model:
+  model_name_or_path: "dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "bpcc_hin_deva.jsonl"
+  dataset_format: "flat"
+  src_field: "src"
+  tgt_field: "tgt"
+  eval_split: 0.2
+  max_length: 512
+  mask_prompt_loss: true
+  num_proc: 4
+
+training:
+  output_dir: ".models/qwen3-a2d-bpcc-translation"
+  num_train_epochs: 5
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 64
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  bf16: true
+  # group_by_length batches similar-length examples together specifically to
+  # minimize padding, which starves the model of long-EOS-tail examples. Off
+  # so every batch gets padded out to fixed_canvas_length below instead.
+  group_by_length: false
+  # Fixed diffusion-canvas width (padded with EOS, kept in the loss) so the
+  # model is actually trained to predict EOS across a long trailing span -
+  # matching the fixed max_new_tokens canvas MDLMSampler builds at inference.
+  fixed_canvas_length: 128
+  eval_strategy: "epoch"
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 5
+  logging_steps: 20
+  seed: 42
+  report_to: "all"
+  wandb_project: "universal-language-translator"
+  # dllm MDLM-specific
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"
