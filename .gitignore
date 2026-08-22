@@ -222,3 +222,6 @@ __marimo__/
 wandb/
 
 .models/
+
+# Workspace-scoped Claude Code credentials (never commit)
+.claude-config/

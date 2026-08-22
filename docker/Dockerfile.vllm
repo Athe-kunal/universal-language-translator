@@ -1,0 +1,22 @@
+# Docs: https://docs.nvidia.com/deploy/cuda-compatibility/
+
+FROM vllm/vllm-openai:v0.19.1
+
+# cuda-compat-12-9 matches the CUDA 12.9.1 base this vllm image ships with.
+# The apt source for NVIDIA's cuda repo is already present in nvidia/cuda base images.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cuda-compat-12-9 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Compat libs must be found before the driver-provided ones.
+ENV LD_LIBRARY_PATH="/usr/local/cuda/compat:${LD_LIBRARY_PATH}"
+
+# Physical GPUs this container is allowed to see. This is only a fallback for manual
+# `docker run` — normal usage (`make vllm-up GPUS=...` / prediction/llm_clinical/docker/
+# vllm_up.sh) overrides it per-run with `-e CUDA_VISIBLE_DEVICES=...`, so the image
+# never needs rebuilding just to change GPUs or model. See README.md in this directory
+# for why `--gpus all` (not an explicit device list) must be used alongside this.
+ENV CUDA_VISIBLE_DEVICES=0
+
+ENTRYPOINT ["vllm", "serve"]
+# No CMD: model + flags are always supplied at `docker run` time (see vllm_up.sh).

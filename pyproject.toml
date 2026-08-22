@@ -36,6 +36,10 @@ dependencies = [
     "lm-eval>=0.4.12",
     "trl>=0.29.1",
     "tensorboard>=2.21.0",
+    "markdown-it-py>=4.2.0",
+    "mdit-py-plugins>=0.6.1",
+    "wtpsplit>=2.2.1",
+    "pandas>=3.0.3",
 ]
 
 [dependency-groups]
@@ -53,6 +57,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+pythonpath = ["."]
 
 # target torch to cuda 12.8 or CPU
 [tool.uv.sources]

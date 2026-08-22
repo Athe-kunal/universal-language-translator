@@ -15,6 +15,21 @@ dataset:
 		--config "$(BPCC_CONFIG)" \
 		--output_file "$(BPCC_OUTPUT_FILE)"
 
+# Samples OpenThoughts3-1.2M (stratified by domain/source/difficulty) and
+# facebook/natural_reasoning (uniform) into a combined TranslationDataset
+# JSONL for the chunking + translation pipeline.
+NUM_OPENTHOUGHTS3     ?= 50000
+NUM_NATURAL_REASONING ?= 50000
+SAMPLE_REASONING_SEED ?= 42
+SAMPLE_REASONING_OUTPUT_FILE ?= sampled_reasoning.jsonl
+
+sample-reasoning:
+	uv run python data_gen/sample_reasoning.py \
+		--num_openthoughts3 "$(NUM_OPENTHOUGHTS3)" \
+		--num_natural_reasoning "$(NUM_NATURAL_REASONING)" \
+		--seed "$(SAMPLE_REASONING_SEED)" \
+		--output_file "$(SAMPLE_REASONING_OUTPUT_FILE)"
+
 export CUDA_HOME ?= /home/ubuntu/.local/fake-cuda
 
 train:
@@ -133,4 +148,29 @@ qwen3-a2d-bd3lm-train-bpcc:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(QWEN3_A2D_BD3LM_TRAIN_CONFIG)
 
-.PHONY: dataset train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc
+###
+# vllm serving (local Qwen/etc. models — see prediction/llm_clinical/docker/README.md)
+###
+VLLM_DIR := docker
+MODEL ?= Qwen/Qwen3.6-27B
+MAX_MODEL_LEN ?= 262144
+
+.PHONY: vllm-up
+vllm-up: # Build (if needed) and launch a vllm server. Required: GPUS="0,1". Optional: MODEL, TP, MAX_MODEL_LEN, GPU_MEM_UTIL, VLLM_PORT, NAME, EXTRA_ARGS (e.g. EXTRA_ARGS="--quantization awq").
+	MODEL="$(MODEL)" GPUS="$(GPUS)" TP="$(TP)" MAX_MODEL_LEN="$(MAX_MODEL_LEN)" \
+	GPU_MEM_UTIL="$(GPU_MEM_UTIL)" PORT="$(VLLM_PORT)" NAME="$(NAME)" EXTRA_ARGS="$(EXTRA_ARGS)" \
+	$(VLLM_DIR)/vllm_up.sh
+
+.PHONY: vllm-down
+vllm-down: # Tear down a vllm server. NAME=<container> (as printed by vllm-up) or VLLM_PORT=<host port>.
+	NAME="$(NAME)" PORT="$(VLLM_PORT)" $(VLLM_DIR)/vllm_down.sh
+
+.PHONY: vllm-ps
+vllm-ps: # List running vllm-server containers.
+	docker ps --filter "label=vllm-server" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+.PHONY: vllm-logs
+vllm-logs: # Tail logs for a vllm server. NAME=<container> (required).
+	docker logs -f "$(NAME)"
+
+.PHONY: dataset sample-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc
