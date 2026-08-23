@@ -29,11 +29,13 @@ import asyncio
 import json
 import re
 import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 from loguru import logger
+import httpx
 from openai import AsyncOpenAI
 
 from data_gen.chunking import ChunkedDocument, Unit, chunk_document, reconstruct, set_sat_device
@@ -41,7 +43,7 @@ from data_gen.datamodels import TranslationDataset
 from data_gen.sample_reasoning import (
     load_done,
     sample_natural_reasoning,
-    sample_openthoughts3_streaming,
+    sample_openthoughts3_shards,
 )
 
 DEFAULT_BASE_URL = "http://localhost:8077/v1"
@@ -411,7 +413,9 @@ async def translate_document(
     """Translates every translatable unit in a document concurrently.
 
     Args:
-        client: Async OpenAI-compatible client.
+        client: Async OpenAI-compatible client. Multi-GPU throughput is
+            handled by vllm's own data-parallel serving (--data-parallel-size)
+            behind this single endpoint, not by this module.
         sem: Concurrency-limiting semaphore, shared across the whole run.
         doc: A ChunkedDocument from `chunk_document`.
         model: Model name to request.
@@ -456,39 +460,80 @@ async def translate_document(
     return {result.unit_id: result for result in results}
 
 
+def _chunk_one(
+    row: TranslationDataset, source: str, min_tokens: int, max_tokens: int
+) -> tuple[TranslationDataset, str, ChunkedDocument | None, str | None]:
+    """Process-pool worker for chunk_all: chunks one document, returning any
+    error as a string instead of raising, so one bad document can't take
+    down a worker process.
+    """
+    try:
+        doc = chunk_document(row.cot_answer, doc_id=row.id, source=source, min_tokens=min_tokens, max_tokens=max_tokens)
+        return row, source, doc, None
+    except Exception as e:
+        return row, source, None, str(e)
+
+
 def chunk_all(
-    jobs: list[tuple[TranslationDataset, str]], min_tokens: int, max_tokens: int, log_every: int = 1000
+    jobs: list[tuple[TranslationDataset, str]],
+    min_tokens: int,
+    max_tokens: int,
+    log_every: int = 1000,
+    max_workers: int | None = None,
 ) -> list[tuple[TranslationDataset, str, ChunkedDocument]]:
-    """Pre-chunks every sampled document in a single synchronous pass, before
-    any translation task is created.
+    """Pre-chunks every sampled document in parallel, before any translation
+    task is created.
 
     This is a deliberate two-phase design: chunk_document is CPU-bound (AST
-    parsing, tiktoken encoding, wtpsplit for oversized units), and running it
-    lazily inside each async translation task serializes a large batch
-    entirely through chunking before any HTTP traffic can flow — observed:
-    a 50K-document batch spent 35+ minutes at 0% vllm GPU utilization while
-    chunking worked through its backlog, one task at a time, on the
-    single-threaded event loop. Chunking everything up front instead (call
-    `chunking.set_sat_device()` to a free GPU first — CPU wtpsplit inference
-    is ~20-40x slower) means the translation phase starts against
-    already-chunked documents and never blocks on chunking again.
+    parsing, tiktoken encoding, wtpsplit for oversized units). Two problems
+    observed running it lazily inside each async translation task: (1) it
+    serializes a large batch entirely through chunking before any HTTP
+    traffic can flow (a 50K-document batch spent 35+ minutes at 0% vllm GPU
+    utilization), and (2) it only used one CPU core even on a 128-core host
+    (~470 docs/min single-threaded — ~91ms/doc of pure-Python AST/regex work
+    that has no GPU equivalent, unlike wtpsplit). Chunking everything up
+    front in a process pool fixes both: translation starts against
+    already-chunked documents, and the embarrassingly-parallel-per-document
+    work actually uses the machine's cores.
 
     Args:
         jobs: (row, source) pairs from the samplers.
         min_tokens: Passed through to chunk_document.
         max_tokens: Passed through to chunk_document.
-        log_every: Log progress every this many documents.
+        log_every: Log progress every this many completed documents.
+        max_workers: Process pool size. None uses ProcessPoolExecutor's
+            default (os.cpu_count()).
 
     Returns:
-        (row, source, doc) triples, same order as `jobs`.
+        (row, source, doc) triples. Not necessarily in `jobs` order (returned
+        in completion order) — fine, since downstream translation dispatch
+        doesn't depend on ordering either.
     """
     results = []
-    for i, (row, source) in enumerate(jobs):
-        doc = chunk_document(row.cot_answer, doc_id=row.id, source=source, min_tokens=min_tokens, max_tokens=max_tokens)
-        results.append((row, source, doc))
-        if (i + 1) % log_every == 0:
-            logger.info(f"chunked {i + 1}/{len(jobs)} documents")
-    logger.info(f"chunked {len(results)}/{len(jobs)} documents")
+    failed = 0
+    completed = 0
+    # Force CPU for wtpsplit inside worker processes: each worker that hits
+    # the split path would otherwise lazily load its own SaT model copy onto
+    # whatever GPU the main process configured, and with many workers doing
+    # this concurrently the GPU runs out of memory (observed: CUDA OOM with
+    # 64 workers). Splits are rare, so losing GPU accel for them here (the
+    # main process's async translation phase still uses GPU for its own
+    # occasional splits) is a good trade for safe, uncontended parallelism.
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=set_sat_device, initargs=("cpu",)) as executor:
+        futures = [executor.submit(_chunk_one, row, source, min_tokens, max_tokens) for row, source in jobs]
+        for future in as_completed(futures):
+            row, source, doc, error = future.result()
+            completed += 1
+            if error is not None:
+                # One malformed document must never take down a batch of
+                # tens of thousands — log and skip it.
+                failed += 1
+                logger.error(f"chunk_document failed for doc_id={row.id}: {error}")
+            else:
+                results.append((row, source, doc))
+            if completed % log_every == 0:
+                logger.info(f"chunked {completed}/{len(jobs)} documents ({failed} failed)")
+    logger.info(f"chunked {len(results)}/{len(jobs)} documents ({failed} failed)")
     return results
 
 
@@ -594,14 +639,25 @@ def parse_args() -> argparse.Namespace:
         help="Per-unit records, appended incrementally as each chunk finishes translating "
         "(useful for watching progress live).",
     )
-    parser.add_argument("--base_url", default=DEFAULT_BASE_URL)
+    parser.add_argument(
+        "--base_url",
+        default=DEFAULT_BASE_URL,
+        help="OpenAI-compatible vllm endpoint. Multi-GPU throughput is handled by vllm's own "
+        "data-parallel serving (--data-parallel-size) behind this single endpoint, not by this "
+        "script (default: %(default)s).",
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--target_language", default=DEFAULT_TARGET_LANGUAGE)
     parser.add_argument("--max_retries", type=int, default=DEFAULT_MAX_RETRIES)
     parser.add_argument("--retry_temperature", type=float, default=DEFAULT_RETRY_TEMPERATURE)
     parser.add_argument("--min_tokens", type=int, default=DEFAULT_MIN_TOKENS)
     parser.add_argument("--max_tokens", type=int, default=DEFAULT_MAX_TOKENS)
-    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help="Max concurrent in-flight requests to the vllm endpoint (default: %(default)s).",
+    )
     parser.add_argument(
         "--similarity_floor",
         type=float,
@@ -624,19 +680,39 @@ def parse_args() -> argparse.Namespace:
         "path for every oversized unit — set to a free GPU for any real batch run "
         "(default: %(default)s).",
     )
+    parser.add_argument(
+        "--chunk_workers",
+        type=int,
+        default=None,
+        help="Process pool size for the pre-chunking pass (CPU-bound, embarrassingly parallel "
+        "per document). None uses os.cpu_count().",
+    )
     return parser.parse_args()
 
 
 async def main() -> None:
     args = parse_args()
     set_sat_device(args.sat_device)
-    client = AsyncOpenAI(base_url=args.base_url, api_key="none")
+    # openai's default httpx client caps max_keepalive_connections at 100 and
+    # connect timeout at 5s — with --concurrency in the hundreds, most
+    # requests can't reuse a kept-alive connection and have to open a new
+    # one, and under sustained high concurrency that can take longer than
+    # 5s, producing spurious "Request timed out" errors even though the
+    # vllm server itself is healthy and responding (observed: 67% document
+    # failure rate at --concurrency 768 with the default client config).
+    # Give the connection pool enough headroom for our own concurrency and a
+    # much more forgiving connect timeout.
+    http_client = httpx.AsyncClient(
+        limits=httpx.Limits(max_connections=args.concurrency * 2, max_keepalive_connections=args.concurrency),
+        timeout=httpx.Timeout(connect=60.0, read=600.0, write=600.0, pool=600.0),
+    )
+    client = AsyncOpenAI(base_url=args.base_url, api_key="none", http_client=http_client)
     sem = asyncio.Semaphore(args.concurrency)
 
     done = load_done(args.output_file)
     logger.info(f"Loaded {len(done)} already-translated ids from {args.output_file}")
 
-    ot3_rows = sample_openthoughts3_streaming(args.num_openthoughts3, args.seed, done)
+    ot3_rows = sample_openthoughts3_shards(args.num_openthoughts3, args.seed, done)
     nr_rows = sample_natural_reasoning(args.num_natural_reasoning, args.seed, done)
     jobs: list[tuple[TranslationDataset, str]] = [(row, "openthoughts") for row in ot3_rows] + [
         (row, "naturalreasoning") for row in nr_rows
@@ -645,7 +721,7 @@ async def main() -> None:
     logger.info(f"Translating {len(jobs)} documents ({len(done)} already done, skipped)")
 
     logger.info("Pre-chunking all documents (one-time CPU/GPU-bound pass before any translation traffic)...")
-    chunked_jobs = chunk_all(jobs, args.min_tokens, args.max_tokens)
+    chunked_jobs = chunk_all(jobs, args.min_tokens, args.max_tokens, max_workers=args.chunk_workers)
 
     args.output_file.parent.mkdir(parents=True, exist_ok=True)
     args.units_output_file.parent.mkdir(parents=True, exist_ok=True)

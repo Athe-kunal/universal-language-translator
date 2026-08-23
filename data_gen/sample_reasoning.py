@@ -244,6 +244,64 @@ def sample_openthoughts3_streaming(num_samples: int, seed: int, done: set[str]) 
     return rows
 
 
+_OT3_SHARD_COUNT = 120
+_OT3_ROWS_PER_SHARD = 10_000  # 1.2M rows / 120 shards, approx
+
+
+def sample_openthoughts3_shards(num_samples: int, seed: int, done: set[str]) -> list[TranslationDataset]:
+    """Uniform-random sample of OpenThoughts3-1.2M by downloading a handful
+    of randomly-chosen whole parquet shards, instead of streaming every row.
+
+    OpenThoughts3-1.2M is stored as 120 roughly-equal parquet shards (~10K
+    rows / ~590MB each). `sample_openthoughts3_streaming`'s reservoir
+    sampling must read every one of the 1.2M rows to guarantee each had an
+    equal chance of selection — measured at ~78 minutes, entirely network-
+    bound. Downloading just enough whole shards to comfortably exceed
+    `num_samples`, then sampling within that pool, gets a genuinely random
+    subset in seconds (measured: 3 shards / 30K rows in ~14s) — at the real
+    cost of not sampling from the *other* shards at all, which is only an
+    unbiased sample of the full 1.2M if the shards are themselves reasonably
+    shuffled (not verified here). Since this pipeline was told stratification
+    isn't needed, that tradeoff is the right one.
+
+    Args:
+        num_samples: Target number of sampled rows.
+        seed: Seed for reproducible shard + row selection.
+        done: Ids already written to the output file, to skip on resume.
+
+    Returns:
+        Mapped TranslationDataset rows, excluding already-done ids and rows
+        missing a human/gpt turn.
+    """
+    rng = random.Random(seed)
+    needed_shards = min(_OT3_SHARD_COUNT, max(1, num_samples // _OT3_ROWS_PER_SHARD + 2))
+    shard_indices = rng.sample(range(_OT3_SHARD_COUNT), needed_shards)
+    data_files = [f"data/train-{i:05d}-of-{_OT3_SHARD_COUNT:05d}.parquet" for i in shard_indices]
+    logger.info(f"Loading {needed_shards}/{_OT3_SHARD_COUNT} random shards of {OPENTHOUGHTS3_DATASET}")
+
+    ds = load_dataset(OPENTHOUGHTS3_DATASET, data_files=data_files, split="train", verification_mode="no_checks")
+    logger.info(f"Loaded {len(ds)} rows from selected shards")
+
+    indices = rng.sample(range(len(ds)), min(num_samples, len(ds)))
+
+    rows = []
+    skipped_no_turns = 0
+    skipped_done = 0
+    for i in indices:
+        mapped = map_openthoughts3_row(ds[i])
+        if mapped is None:
+            skipped_no_turns += 1
+        elif mapped.id in done:
+            skipped_done += 1
+        else:
+            rows.append(mapped)
+    logger.info(
+        f"openthoughts3: {len(rows)} rows ready "
+        f"({skipped_no_turns} missing human/gpt turn, {skipped_done} already done)"
+    )
+    return rows
+
+
 def sample_openthoughts3(num_samples: int, seed: int, done: set[str]) -> list[TranslationDataset]:
     """Loads and stratified-samples OpenThoughts3-1.2M, mapped to TranslationDataset.
 

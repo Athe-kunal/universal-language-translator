@@ -236,17 +236,25 @@ def _find_protectable_nodes(
     for child in node.children or []:
         if child.type in _INLINE_PROTECT_KINDS:
             needle = f"{child.markup}{child.content}{child.markup}"
-            idx = text_raw.index(needle, cursor)
-            spans.append(
-                ProtectedSpan(
-                    placeholder="",
-                    original=needle,
-                    kind=_INLINE_PROTECT_KINDS[child.type],
-                    start=idx,
-                    end=idx + len(needle),
+            # CommonMark normalizes code-span content (line endings -> spaces,
+            # a single leading/trailing space stripped), so markup+content+
+            # markup doesn't always reconstruct an exact substring of the
+            # original text_raw (observed on real data: a lone literal "`"
+            # character paired with a distant backtick elsewhere produced
+            # content that didn't match). Skip protecting this one node
+            # rather than crash the whole unit over an unprotected span.
+            idx = text_raw.find(needle, cursor)
+            if idx != -1:
+                spans.append(
+                    ProtectedSpan(
+                        placeholder="",
+                        original=needle,
+                        kind=_INLINE_PROTECT_KINDS[child.type],
+                        start=idx,
+                        end=idx + len(needle),
+                    )
                 )
-            )
-            cursor = idx + len(needle)
+                cursor = idx + len(needle)
         elif child.type in _BLOCK_PROTECT_KINDS and child.map is not None:
             block_start, block_end = _node_span(child, line_starts)
             start = block_start - unit_char_start
@@ -265,8 +273,11 @@ def _find_protectable_nodes(
             if child.type == "link_open":
                 href_attr = child.attrGet("href")
                 href = str(href_attr) if href_attr is not None else ""
-                if href:
-                    idx = text_raw.index(href, cursor)
+                # Reference-style links ([text][ref]) or percent-encoding
+                # normalization mean href doesn't always appear verbatim in
+                # text_raw — skip protecting it rather than crash the unit.
+                idx = text_raw.find(href, cursor) if href else -1
+                if idx != -1:
                     spans.append(
                         ProtectedSpan(
                             placeholder="",

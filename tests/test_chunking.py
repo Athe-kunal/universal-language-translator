@@ -206,3 +206,17 @@ def test_fragment_sandwiched_between_code_fences_becomes_code():
     (else_unit,) = [u for u in units if u.text_raw.strip() == "else:"]
     assert else_unit.kind == "code"
     assert else_unit.translate is False
+
+
+def test_lone_backtick_does_not_crash_protection():
+    # A single literal backtick as prose (not a real code span) can get
+    # paired by CommonMark with a distant backtick elsewhere, producing
+    # code_inline content that CommonMark's whitespace normalization means
+    # doesn't reconstruct as an exact substring of text_raw — this must not
+    # crash chunk_document (real crash found on OpenThoughts3 production data).
+    text = (
+        "After the backtick ` comes the lowercase letters starting with a, "
+        "so after ` comes the alphabet, which is 26 letters.\n"
+    )
+    doc = chunk_document(text, doc_id="doc", source="openthoughts")
+    assert reconstruct(doc, {}) == text
