@@ -178,3 +178,31 @@ def test_discourse_markers_not_flagged_for_naturalreasoning():
     text = "Wait, let me reconsider this whole approach before continuing further.\n"
     doc = chunk_document(text, doc_id="doc", source="naturalreasoning")
     assert doc.units[0].has_discourse_markers is False
+
+
+def test_orphan_fragment_between_lists_is_absorbed():
+    text = "- item one\n- item two\n\nAND\n\n- item three\n- item four\n"
+    doc = chunk_document(text, doc_id="doc", source="openthoughts")
+    assert not any(u.text_raw.strip() == "AND" for u in doc.units)
+    assert reconstruct(doc, {}) == text
+
+
+def test_orphan_fragment_between_paragraphs_is_absorbed():
+    text = (
+        "This is a reasonably long first paragraph with enough words in it to "
+        "clear the min_tokens merge threshold on its own without help.\n\n"
+        "Hmm.\n\n"
+        "This is a second reasonably long paragraph with enough words in it to "
+        "also clear the min_tokens merge threshold entirely by itself.\n"
+    )
+    doc = chunk_document(text, doc_id="doc", source="openthoughts")
+    assert not any(u.text_raw.strip() == "Hmm." for u in doc.units)
+    assert reconstruct(doc, {}) == text
+
+
+def test_fragment_sandwiched_between_code_fences_becomes_code():
+    text = "```python\nif x:\n```\n\nelse:\n\n```python\n    y = 1\n```\n"
+    units = build_units(text, doc_id="doc", source="openthoughts")
+    (else_unit,) = [u for u in units if u.text_raw.strip() == "else:"]
+    assert else_unit.kind == "code"
+    assert else_unit.translate is False

@@ -59,7 +59,9 @@ def _load_cache(path: str, mtime: float):
 st.set_page_config(page_title="EN → HI Translator", layout="centered")
 st.title("English → Hindi Translator")
 
-tab_free, tab_translate, tab_cache = st.tabs(["Translate (free text)", "Translate (Q&A)", "Translation Cache"])
+tab_free, tab_translate, tab_cache, tab_reasoning = st.tabs(
+    ["Translate (free text)", "Translate (Q&A)", "Translation Cache", "Reasoning Translations"]
+)
 
 with tab_free:
     model_path_free = st.sidebar.text_input(
@@ -190,3 +192,119 @@ with tab_translate:
                 col1.write(en)
                 col2.caption(f"Chunk {i} — HI")
                 col2.write(hi)
+
+with tab_reasoning:
+    st.caption(
+        "Output of `data_gen/translate_reasoning.py` — chunked OpenThoughts3 / "
+        "natural_reasoning documents translated via `data_gen/chunking.py` + a "
+        "vllm-served model, with n-gram-repetition and placeholder-conservation "
+        "retry built in."
+    )
+    with st.expander("Live progress (per-chunk, updates while a run is in progress)", expanded=False):
+        units_path = st.text_input(
+            "Per-unit JSONL path", value="translated_reasoning_units.jsonl", key="units_path"
+        )
+        if st.button("Refresh", key="units_refresh"):
+            st.rerun()
+        up = Path(units_path)
+        if not up.exists():
+            st.info(f"`{units_path}` not found yet.")
+        else:
+            unit_records = _load_cache(str(up), up.stat().st_mtime)
+            st.caption(f"{len(unit_records)} chunk(s) translated so far")
+            retried_live = sum(1 for u in unit_records if u.get("retries", 0) > 0)
+            exhausted_live = sum(1 for u in unit_records if u.get("exhausted"))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Chunks so far", len(unit_records))
+            c2.metric("Retried", retried_live)
+            c3.metric("Exhausted", exhausted_live)
+            st.caption("Most recent 20 chunks:")
+            for u in unit_records[-20:][::-1]:
+                flag = " 🔴 exhausted" if u.get("exhausted") else (" 🟡 retried" if u.get("retries", 0) > 0 else "")
+                st.markdown(f"**[{u.get('doc_id', '')[:10]} / {u.get('unit_id', '')}]**{flag}")
+                ucol1, ucol2 = st.columns(2)
+                ucol1.caption("EN")
+                ucol1.write(u.get("en", "")[:300])
+                ucol2.caption("HI")
+                ucol2.write((u.get("hi") or "_<fell back to EN>_")[:300])
+
+    reasoning_path = st.text_input(
+        "Translated-reasoning JSONL path", value="translated_reasoning.jsonl", key="reasoning_path"
+    )
+    rp = Path(reasoning_path)
+    if not rp.exists():
+        st.warning(f"`{reasoning_path}` not found.")
+    else:
+        docs = _load_cache(str(rp), rp.stat().st_mtime)
+        st.caption(f"{len(docs)} document(s) loaded")
+
+        source_filter = st.selectbox(
+            "Source", ["all", "openthoughts", "naturalreasoning"], key="reasoning_source_filter"
+        )
+        docs_view = docs if source_filter == "all" else [d for d in docs if d.get("source") == source_filter]
+
+        all_units = [u for d in docs_view for u in d.get("units", [])]
+        total_units = len(all_units)
+        retried_units = sum(1 for u in all_units if u.get("retries", 0) > 0)
+        exhausted_units = sum(1 for u in all_units if u.get("exhausted"))
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Documents", len(docs_view))
+        col2.metric("Units", total_units)
+        col3.metric("Retried", f"{retried_units} ({100 * retried_units / total_units:.1f}%)" if total_units else "0")
+        col4.metric(
+            "Exhausted (fell back to EN)",
+            f"{exhausted_units} ({100 * exhausted_units / total_units:.1f}%)" if total_units else "0",
+        )
+
+        query = st.text_input("Search (matches id/question/en_cot_answer)", value="", key="reasoning_query")
+        if query:
+            q = query.lower()
+            docs_view = [
+                d
+                for d in docs_view
+                if q in d.get("id", "").lower()
+                or q in d.get("question", "").lower()
+                or q in d.get("en_cot_answer", "").lower()
+            ]
+            st.caption(f"{len(docs_view)} match(es)")
+
+        only_with_issues = st.checkbox("Only show documents with retried/exhausted units", value=False)
+        if only_with_issues:
+            docs_view = [d for d in docs_view if any(u.get("retries", 0) > 0 for u in d.get("units", []))]
+
+        n = st.number_input(
+            "Max documents to show",
+            min_value=1,
+            max_value=len(docs_view) or 1,
+            value=min(20, len(docs_view) or 1),
+            key="reasoning_max_rows",
+        )
+
+        for d in docs_view[: int(n)]:
+            n_retried = sum(1 for u in d.get("units", []) if u.get("retries", 0) > 0)
+            n_exhausted = sum(1 for u in d.get("units", []) if u.get("exhausted"))
+            badge = f" ⚠️ retried={n_retried} exhausted={n_exhausted}" if n_retried else ""
+            with st.expander(f"[{d.get('source', '')}] {d.get('id', '')[:12]} — {d.get('question', '')[:80]}{badge}"):
+                col1, col2 = st.columns(2)
+                col1.subheader("Full document — EN")
+                col1.write(d.get("en_cot_answer", ""))
+                col2.subheader("Full document — HI (reconstructed)")
+                col2.write(d.get("hi_cot_answer", ""))
+
+                st.subheader(f"Units ({len(d.get('units', []))})")
+                for u in d.get("units", []):
+                    flag = ""
+                    if u.get("exhausted"):
+                        flag = " 🔴 exhausted — fell back to EN"
+                    elif u.get("retries", 0) > 0:
+                        flag = f" 🟡 retried {u['retries']}x"
+                    st.markdown(f"**[{u.get('unit_id', '')}]** kind=`{u.get('kind')}`{flag}")
+                    ucol1, ucol2 = st.columns(2)
+                    ucol1.caption("EN")
+                    ucol1.write(u.get("en", ""))
+                    ucol2.caption("HI")
+                    ucol2.write(u.get("hi") if u.get("hi") is not None else "_<fell back to EN — see erroneous attempt below>_")
+                    if u.get("erroneous_translation"):
+                        st.caption("Erroneous attempt shown to the model on retry:")
+                        st.text(u["erroneous_translation"])
+                    st.divider()

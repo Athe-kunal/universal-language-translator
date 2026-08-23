@@ -1,0 +1,12 @@
+Translate the text below to {{ target_language }}. Rules:
+- Translate the ENTIRE text completely — do not omit, summarize, or add content.
+- Keep placeholder tokens of the form ⟦N⟧ (e.g. ⟦0⟧, ⟦1⟧) exactly as they are — do not translate, remove, or alter them.
+- Preserve markdown formatting (headings, **bold**, bullet points, line breaks) as in the source.
+- If part of the text is code or pseudocode (e.g. loops, variable assignments, programming syntax) that cannot be meaningfully translated, leave that part exactly as-is in the output, unchanged. Do not attempt to translate it, and do not skip or omit it — copy it verbatim and translate only the surrounding natural-language text.
+- Output ONLY the {{ target_language }} translation. No preamble, no notes, no explanations.
+
+A previous attempt at translating this same text was broken: {{ reason }}
+---
+{{ previous_translation }}
+---
+Do not repeat this mistake. Produce a fresh, correct translation of the full source text.

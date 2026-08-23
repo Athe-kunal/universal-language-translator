@@ -8,7 +8,8 @@ No translation, no embeddings, no scoring here. Segment, classify, protect.
 """
 
 import re
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import tiktoken
@@ -468,6 +469,8 @@ def _build_unit(
     doc_id: str,
     source: str,
     index: int,
+    char_start_override: int | None = None,
+    char_end_override: int | None = None,
 ) -> Unit:
     """Builds a single Unit from one top-level AST node.
 
@@ -478,12 +481,22 @@ def _build_unit(
         doc_id: Identifier of the parent document.
         source: "openthoughts" | "naturalreasoning".
         index: This unit's contiguous index within the document.
+        char_start_override: If given, use this instead of the node's own
+            span start — used to pull the very first unit back to 0, since
+            a block node's `.map` excludes leading blank lines and those
+            would otherwise be lost (no preceding unit's gap covers them).
+        char_end_override: Same, for the very last unit and trailing blank
+            lines at the end of the document.
 
     Returns:
         The assembled Unit, protected and fingerprinted.
     """
     kind, translate = _NODE_KIND.get(node.type, (node.type, True))
     char_start, char_end = _node_span(node, line_starts)
+    if char_start_override is not None:
+        char_start = char_start_override
+    if char_end_override is not None:
+        char_end = char_end_override
     text_raw = text[char_start:char_end]
     if translate:
         text_protected, spans = protect_unit(node, text_raw, line_starts, char_start)
@@ -506,6 +519,33 @@ def _build_unit(
     )
 
 
+def _absorb_code_islands(units: list[Unit]) -> list[Unit]:
+    """Reclassifies a translatable unit sandwiched between two non-translatable
+    code units as code itself, not translatable prose.
+
+    A stray unfenced fragment (e.g. a bare "else:" line) can end up as its
+    own "paragraph" node purely because the source document's code fencing
+    is inconsistent — if a fence appears immediately before AND after it,
+    it's almost certainly part of the same code, not real prose, regardless
+    of what the parser classified it as.
+
+    Args:
+        units: Unmerged Units in document order, from the per-node build loop.
+
+    Returns:
+        Units with any such code-island unit reclassified to translate=False.
+    """
+    result = list(units)
+    for i in range(1, len(result) - 1):
+        unit = result[i]
+        if not unit.translate or result[i - 1].translate or result[i + 1].translate:
+            continue
+        if result[i - 1].kind != "code" or result[i + 1].kind != "code":
+            continue
+        result[i] = replace(unit, kind="code", translate=False, text_protected=unit.text_raw, spans=[])
+    return result
+
+
 def build_units(text: str, doc_id: str, source: str) -> list[Unit]:
     """Segments a document's top-level AST nodes into unmerged, unsplit Units.
 
@@ -518,10 +558,22 @@ def build_units(text: str, doc_id: str, source: str) -> list[Unit]:
         One Unit per top-level markdown block, in document order.
     """
     tree, line_starts = _top_level_nodes(text)
-    return [
-        _build_unit(node, text, line_starts, doc_id, source, index)
-        for index, node in enumerate(tree.children)
+    children = tree.children
+    last = len(children) - 1
+    units = [
+        _build_unit(
+            node,
+            text,
+            line_starts,
+            doc_id,
+            source,
+            index,
+            char_start_override=0 if index == 0 else None,
+            char_end_override=len(text) if index == last else None,
+        )
+        for index, node in enumerate(children)
     ]
+    return _absorb_code_islands(units)
 
 
 _SHORT_HEADER_TOKENS = 8
@@ -631,6 +683,7 @@ def merge_units(units: list[Unit], text: str, min_tokens: int) -> list[Unit]:
         groups.append([current])
         i = j
 
+    groups = _absorb_orphan_groups(groups, min_tokens)
     merged = [_merge_group(g, text) if len(g) > 1 else g[0] for g in groups]
     for index, unit in enumerate(merged):
         unit.index = index
@@ -638,9 +691,76 @@ def merge_units(units: list[Unit], text: str, min_tokens: int) -> list[Unit]:
     return merged
 
 
+def _absorb_orphan_groups(groups: list[list[Unit]], min_tokens: int) -> list[list[Unit]]:
+    """Second merge pass: folds a standalone, sub-`min_tokens` translatable
+    group into an adjacent translatable group (previous preferred, else
+    next), regardless of kind mismatch.
+
+    The kind-specific rules above (lead-in+list, short-header+paragraph,
+    consecutive short paragraphs) only merge specific kind pairs and only
+    ever look forward — a short fragment next to a `list`, or one whose
+    forward neighbor doesn't itself qualify, falls through every rule and
+    ships alone (e.g. a lone "AND" between two list units, or "Hmm."
+    followed by a paragraph that isn't itself short). This pass catches
+    what's left over, using the same `min_tokens` floor as the rest of
+    Step 3 rather than a separate threshold.
+
+    Args:
+        groups: Groups from the main merge pass, each a list of one or more
+            consecutive Units to be flattened into a single merged Unit.
+        min_tokens: Token threshold below which a standalone unit is
+            considered too short to ship on its own.
+
+    Returns:
+        Groups with remaining orphans folded into a translatable neighbor,
+        or left alone if no translatable neighbor exists at all (e.g. a
+        fragment sandwiched between two code fences — see
+        `_absorb_code_islands`, which handles that case earlier).
+    """
+    result: list[list[Unit]] = []
+    i = 0
+    n = len(groups)
+    while i < n:
+        group = groups[i]
+        is_orphan = len(group) == 1 and group[0].translate and group[0].token_count < min_tokens
+        if not is_orphan:
+            result.append(group)
+            i += 1
+            continue
+        if result and result[-1][-1].translate:
+            result[-1] = result[-1] + group
+            i += 1
+        elif i + 1 < n and groups[i + 1][0].translate:
+            result.append(group + groups[i + 1])
+            i += 2
+        else:
+            result.append(group)
+            i += 1
+    return result
+
+
 _SPLIT_RATE_WARN_THRESHOLD = 0.15
 _SAT_MODEL_NAME = "sat-3l-sm"
 _sat_model = None
+_sat_lock = threading.Lock()
+_SAT_DEVICE = "cpu"
+
+
+def set_sat_device(device: str) -> None:
+    """Sets the device wtpsplit's SaT model loads onto on first use.
+
+    CPU inference for this model is ~20-40x slower than GPU for the same
+    input (measured: a batch of split-heavy documents that took 3+ minutes
+    on CPU took well under 1s/doc on GPU) — worth setting explicitly to a
+    free GPU for any batch run, since split_units is on the hot path for
+    every oversized unit. Must be called before the first split-triggering
+    chunk_document() call; has no effect once the model is already loaded.
+
+    Args:
+        device: e.g. "cpu", "cuda:0".
+    """
+    global _SAT_DEVICE
+    _SAT_DEVICE = device
 
 
 def _get_sat_model():
@@ -648,14 +768,24 @@ def _get_sat_model():
     importing this module doesn't pay the model-load cost unless a paragraph
     actually needs splitting.
 
+    Guarded by a real (non-async) lock: `chunk_document` can be invoked from
+    many `asyncio.to_thread` calls concurrently, so without this, multiple
+    threads could race to construct the model on its first use (same class
+    of bug fixed for the LaBSE model in translate_reasoning.py).
+
     Returns:
-        A loaded `wtpsplit.SaT` instance.
+        A loaded `wtpsplit.SaT` instance, moved to `_SAT_DEVICE` if it isn't "cpu".
     """
     global _sat_model
     if _sat_model is None:
-        from wtpsplit import SaT
+        with _sat_lock:
+            if _sat_model is None:
+                from wtpsplit import SaT
 
-        _sat_model = SaT(_SAT_MODEL_NAME)
+                model = SaT(_SAT_MODEL_NAME)
+                if _SAT_DEVICE != "cpu":
+                    model.to(_SAT_DEVICE)
+                _sat_model = model
     return _sat_model
 
 

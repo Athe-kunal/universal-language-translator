@@ -37,6 +37,15 @@ def row_id(question: str) -> str:
     return hashlib.md5(question.encode()).hexdigest()
 
 
+def strip_think_tags(text: str) -> str:
+    """Removes literal <think>/</think> tag markers, keeping all reasoning
+    content between them intact — unlike translate_ds.py's strip_think()
+    (which drops the whole reasoning block), here only the tag tokens are
+    noise; the reasoning trace itself is the whole point of this dataset.
+    """
+    return text.replace("<think>", "").replace("</think>", "").strip()
+
+
 def load_done(output_file: Path) -> set[str]:
     """Loads ids already written to `output_file`, so a rerun can resume.
 
@@ -148,7 +157,7 @@ def map_openthoughts3_row(row: dict[str, Any]) -> TranslationDataset | None:
         id=row_id(question),
         question=question,
         reference_answer=None,
-        cot_answer=conversations[gpt_idx]["value"],
+        cot_answer=strip_think_tags(conversations[gpt_idx]["value"]),
         metadata={
             "difficulty": row["difficulty"],
             "domain": row["domain"],
@@ -187,6 +196,52 @@ def map_natural_reasoning_row(row: dict[str, Any]) -> TranslationDataset | None:
         },
         source="natural-reasoning",
     )
+
+
+def sample_openthoughts3_streaming(num_samples: int, seed: int, done: set[str]) -> list[TranslationDataset]:
+    """Uniform-random single-pass reservoir sample of OpenThoughts3-1.2M via
+    streaming, avoiding the ~71GB non-streaming full-dataset download/cache
+    `sample_openthoughts3` requires. Not stratified — a plain unbiased
+    uniform sample (Algorithm R reservoir sampling) over the full stream.
+
+    Args:
+        num_samples: Target number of sampled rows.
+        seed: Seed for reproducible sampling.
+        done: Ids already written to the output file, to skip on resume.
+
+    Returns:
+        Mapped TranslationDataset rows, excluding already-done ids and rows
+        missing a human/gpt turn.
+    """
+    logger.info(f"Streaming {OPENTHOUGHTS3_DATASET} (reservoir sampling, no full-dataset download)")
+    ds = load_dataset(OPENTHOUGHTS3_DATASET, split="train", streaming=True)
+    rng = random.Random(seed)
+    reservoir: list[dict] = []
+    for i, row in enumerate(ds):
+        if len(reservoir) < num_samples:
+            reservoir.append(row)
+        else:
+            j = rng.randint(0, i)
+            if j < num_samples:
+                reservoir[j] = row
+    logger.info(f"Reservoir-sampled {len(reservoir)} rows from the stream")
+
+    rows = []
+    skipped_no_turns = 0
+    skipped_done = 0
+    for row in reservoir:
+        mapped = map_openthoughts3_row(row)
+        if mapped is None:
+            skipped_no_turns += 1
+        elif mapped.id in done:
+            skipped_done += 1
+        else:
+            rows.append(mapped)
+    logger.info(
+        f"openthoughts3: {len(rows)} rows ready "
+        f"({skipped_no_turns} missing human/gpt turn, {skipped_done} already done)"
+    )
+    return rows
 
 
 def sample_openthoughts3(num_samples: int, seed: int, done: set[str]) -> list[TranslationDataset]:

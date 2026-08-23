@@ -30,6 +30,30 @@ sample-reasoning:
 		--seed "$(SAMPLE_REASONING_SEED)" \
 		--output_file "$(SAMPLE_REASONING_OUTPUT_FILE)"
 
+# Chunks + translates OpenThoughts3/natural_reasoning documents to Hindi via
+# data_gen/translate_reasoning.py, against a vllm server started with vllm-up
+# (or vllm-up-4b). Writes both the reconstructed per-document JSONL and a
+# per-chunk JSONL updated incrementally — view either live in `streamlit run
+# app.py`'s "Reasoning Translations" tab.
+# Deliberately separate from NUM_OPENTHOUGHTS3/NUM_NATURAL_REASONING above
+# (those default to 50000 for sample-reasoning) — translation is far more
+# expensive per document than sampling, so this target defaults small.
+TRANSLATE_NUM_OPENTHOUGHTS3   ?= 100
+TRANSLATE_NUM_NATURAL_REASONING ?= 100
+TRANSLATE_REASONING_BASE_URL ?= http://localhost:8077/v1
+TRANSLATE_REASONING_MODEL    ?= Qwen/Qwen3-4B-Instruct-2507
+TRANSLATE_REASONING_OUTPUT_FILE       ?= translated_reasoning.jsonl
+TRANSLATE_REASONING_UNITS_OUTPUT_FILE ?= translated_reasoning_units.jsonl
+
+translate-reasoning:
+	uv run python data_gen/translate_reasoning.py \
+		--num_openthoughts3 "$(TRANSLATE_NUM_OPENTHOUGHTS3)" \
+		--num_natural_reasoning "$(TRANSLATE_NUM_NATURAL_REASONING)" \
+		--base_url "$(TRANSLATE_REASONING_BASE_URL)" \
+		--model "$(TRANSLATE_REASONING_MODEL)" \
+		--output_file "$(TRANSLATE_REASONING_OUTPUT_FILE)" \
+		--units_output_file "$(TRANSLATE_REASONING_UNITS_OUTPUT_FILE)"
+
 export CUDA_HOME ?= /home/ubuntu/.local/fake-cuda
 
 train:
@@ -152,12 +176,26 @@ qwen3-a2d-bd3lm-train-bpcc:
 # vllm serving (local Qwen/etc. models — see prediction/llm_clinical/docker/README.md)
 ###
 VLLM_DIR := docker
-MODEL ?= Qwen/Qwen3.6-27B
-MAX_MODEL_LEN ?= 262144
+VLLM_MODEL ?= sarvamai/sarvam-translate
+MAX_MODEL_LEN ?= 8192
 
 .PHONY: vllm-up
 vllm-up: # Build (if needed) and launch a vllm server. Required: GPUS="0,1". Optional: MODEL, TP, MAX_MODEL_LEN, GPU_MEM_UTIL, VLLM_PORT, NAME, EXTRA_ARGS (e.g. EXTRA_ARGS="--quantization awq").
-	MODEL="$(MODEL)" GPUS="$(GPUS)" TP="$(TP)" MAX_MODEL_LEN="$(MAX_MODEL_LEN)" \
+	MODEL="$(VLLM_MODEL)" GPUS="$(GPUS)" TP="$(TP)" MAX_MODEL_LEN="$(MAX_MODEL_LEN)" \
+	GPU_MEM_UTIL="$(GPU_MEM_UTIL)" PORT="$(VLLM_PORT)" NAME="$(NAME)" EXTRA_ARGS="$(EXTRA_ARGS)" \
+	$(VLLM_DIR)/vllm_up.sh
+
+# General-purpose instruct model (as opposed to VLLM_MODEL/sarvam-translate, a
+# narrow dedicated MT model) — for comparing translation completeness, since a
+# proper instruct model separates system-prompt instructions from user content
+# instead of leaking/translating the instructions themselves. See
+# data_gen/chunking.py for the chunker this feeds; pick a distinct NAME/VLLM_PORT
+# so it can run alongside an existing vllm-up server.
+VLLM_MODEL_4B ?= Qwen/Qwen3-4B-Instruct-2507
+
+.PHONY: vllm-up-4b
+vllm-up-4b: # Build (if needed) and launch a vllm server for the 4B instruct model. Required: GPUS="0,1". Optional: VLLM_MODEL_4B, TP, MAX_MODEL_LEN, GPU_MEM_UTIL, VLLM_PORT, NAME, EXTRA_ARGS.
+	MODEL="$(VLLM_MODEL_4B)" GPUS="$(GPUS)" TP="$(TP)" MAX_MODEL_LEN="$(MAX_MODEL_LEN)" \
 	GPU_MEM_UTIL="$(GPU_MEM_UTIL)" PORT="$(VLLM_PORT)" NAME="$(NAME)" EXTRA_ARGS="$(EXTRA_ARGS)" \
 	$(VLLM_DIR)/vllm_up.sh
 
@@ -173,4 +211,4 @@ vllm-ps: # List running vllm-server containers.
 vllm-logs: # Tail logs for a vllm server. NAME=<container> (required).
 	docker logs -f "$(NAME)"
 
-.PHONY: dataset sample-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc

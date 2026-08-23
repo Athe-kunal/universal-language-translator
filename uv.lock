@@ -1698,6 +1698,7 @@ dependencies = [
     { name = "dllm" },
     { name = "fastapi" },
     { name = "ipykernel" },
+    { name = "jinja2" },
     { name = "kernels" },
     { name = "litellm" },
     { name = "lm-eval" },
@@ -1716,6 +1717,7 @@ dependencies = [
     { name = "rich" },
     { name = "rustbpe" },
     { name = "scipy" },
+    { name = "sentence-transformers" },
     { name = "setuptools" },
     { name = "tabulate" },
     { name = "tensorboard" },
@@ -1753,6 +1755,7 @@ requires-dist = [
     { name = "dllm", editable = "dllm-src" },
     { name = "fastapi", specifier = ">=0.117.1" },
     { name = "ipykernel", specifier = ">=7.1.0" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "kernels", specifier = ">=0.11.7" },
     { name = "litellm", specifier = ">=1.72.0" },
     { name = "lm-eval", specifier = ">=0.4.12" },
@@ -1771,6 +1774,7 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0" },
     { name = "rustbpe", specifier = ">=0.1.0" },
     { name = "scipy", specifier = ">=1.15.3" },
+    { name = "sentence-transformers", specifier = ">=5.7.0" },
     { name = "setuptools", specifier = ">=80.9.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tensorboard", specifier = ">=2.21.0" },
@@ -3967,6 +3971,29 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/65/94/7698add8f276dbab7a9de9fb6b0e02fc13ee61d51c7c3f85ac28b65e1239/scipy-1.17.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:f590cd684941912d10becc07325a3eeb77886fe981415660d9265c4c418d0bea", size = 37625856, upload-time = "2026-02-23T00:19:00.307Z" },
     { url = "https://files.pythonhosted.org/packages/a2/84/dc08d77fbf3d87d3ee27f6a0c6dcce1de5829a64f2eae85a0ecc1f0daa73/scipy-1.17.1-cp312-cp312-win_amd64.whl", hash = "sha256:41b71f4a3a4cab9d366cd9065b288efc4d4f3c0b37a91a8e0947fb5bd7f31d87", size = 36549682, upload-time = "2026-02-23T00:19:07.67Z" },
     { url = "https://files.pythonhosted.org/packages/bc/98/fe9ae9ffb3b54b62559f52dedaebe204b408db8109a8c66fdd04869e6424/scipy-1.17.1-cp312-cp312-win_arm64.whl", hash = "sha256:f4115102802df98b2b0db3cce5cb9b92572633a1197c77b7553e5203f284a5b3", size = 24547340, upload-time = "2026-02-23T00:19:12.024Z" },
+]
+
+[[package]]
+name = "sentence-transformers"
+version = "5.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "tokenizers" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-19-language-translator-cpu') or (extra == 'extra-19-language-translator-cpu' and extra == 'extra-19-language-translator-gpu')" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-19-language-translator-cpu' and extra == 'extra-19-language-translator-gpu') or (extra != 'extra-19-language-translator-cpu' and extra != 'extra-19-language-translator-gpu')" },
+    { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-19-language-translator-cpu') or (extra == 'extra-19-language-translator-cpu' and extra == 'extra-19-language-translator-gpu')" },
+    { name = "torch", version = "2.10.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "extra == 'extra-19-language-translator-gpu'" },
+    { name = "tqdm" },
+    { name = "transformers" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/59/867381b1414a975da6c9953f48a07c05cb0629305e2d37c9bcc9764367b2/sentence_transformers-5.7.0.tar.gz", hash = "sha256:fd8c8fc35e6323631dff9f3760969ebf7980dc3cfda0ab1354bc6a774cc0e5d8", size = 466382, upload-time = "2026-08-06T12:12:33.371Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/c8/f63d99e354532f5b83e735dd1e001bda92495fbfde934f65d924abf2b071/sentence_transformers-5.7.0-py3-none-any.whl", hash = "sha256:b78141da3d8137e70d965866e2ca43190b9266f3d4d8752e250ded75e7136730", size = 611333, upload-time = "2026-08-06T12:12:31.881Z" },
 ]
 
 [[package]]
