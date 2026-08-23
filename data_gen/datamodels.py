@@ -10,4 +10,4 @@ class TranslationDataset:
     reference_answer: str | None
     cot_answer: str
     metadata: dict[str, Any] #useful for provenance
-    source: Literal["openthoughts3", "natural-reasoning"]
+    source: Literal["openthoughts3", "natural-reasoning", "opencodereasoning"]

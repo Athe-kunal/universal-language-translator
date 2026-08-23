@@ -335,3 +335,24 @@ before you left:
 2. Check progress: `wc -l translated_reasoning_25k.jsonl translated_reasoning_25k_units.jsonl`.
 3. If you want a live look while it's still running, `streamlit run app.py` → "Reasoning Translations" tab → "Live progress" section reads the units file incrementally.
 4. Decide whether the unstratified OT3 sample is acceptable for the HF release, or whether to redo with stratification (see point 1 above).
+
+## UPDATE 8: run killed, both the process and the vllm GPU servers torn down
+
+You explicitly killed this run ("bullshit, okay kill it" / "kill the gpu
+process too") once the multi-GPU data-parallel ETA still looked
+unacceptable. Both the `translate_reasoning.py` process and the vllm GPU
+containers (GPU0/1/3 data-parallel group) were stopped; no `translate_reasoning`
+or `vllm` server process is running anymore (only idle `screen` sessions
+remain, holding no active work).
+
+Final state left on disk, preserved (not deleted) since it's real completed
+work:
+- `translated_reasoning_25k.jsonl` — 1,749 fully-reconstructed documents.
+- `translated_reasoning_25k_units.jsonl` — 868,391 translated units (per-unit
+  records, incremental).
+
+Everything after this point (chunk-level token-size distribution review,
+the "chain of thought needs step-level breakdown for PRM-style training"
+discussion, and the resulting semantic-step-segmentation design) operates as
+pure post-processing on these two files — no further LLM translation calls
+are needed to build that.

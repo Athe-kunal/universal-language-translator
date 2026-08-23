@@ -1,8 +1,8 @@
 """Translates chunked OpenThoughts3 / natural_reasoning documents to Hindi.
 
-Samples `open-thoughts/OpenThoughts3-1.2M` (stratified by domain/source/
-difficulty) and `facebook/natural_reasoning` (uniform) via
-`data_gen.sample_reasoning`, chunks each `cot_answer` via
+Samples `open-thoughts/OpenThoughts3-1.2M`, `facebook/natural_reasoning`, and
+`nvidia/OpenCodeReasoning` (all uniform random) via `data_gen.sample_reasoning`,
+chunks each `cot_answer` via
 `data_gen.chunking.chunk_document`, translates every translatable unit
 through an OpenAI-compatible vllm endpoint, and reconstructs the full Hindi
 document. Prompts are Jinja templates under `data_gen/prompts/`, so wording
@@ -43,6 +43,7 @@ from data_gen.datamodels import TranslationDataset
 from data_gen.sample_reasoning import (
     load_done,
     sample_natural_reasoning,
+    sample_opencodereasoning_shards,
     sample_openthoughts3_shards,
 )
 
@@ -624,10 +625,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_openthoughts3", type=int, default=100)
     parser.add_argument("--num_natural_reasoning", type=int, default=100)
     parser.add_argument(
+        "--num_opencodereasoning",
+        type=int,
+        default=0,
+        help="Number of nvidia/OpenCodeReasoning rows to sample (default: %(default)s — "
+        "opt-in, alongside the original two sources).",
+    )
+    parser.add_argument(
+        "--opencodereasoning_config",
+        default="split_0",
+        choices=["split_0", "split_1"],
+        help="Which OpenCodeReasoning HF config to sample from (default: %(default)s).",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Seed for reproducible stratified/uniform sampling, matching sample_reasoning.py "
+        help="Seed for reproducible sampling, matching sample_reasoning.py "
         "(default: %(default)s) — same seed + same output_file lets a rerun resume and reuse "
         "cached results.",
     )
@@ -717,6 +731,12 @@ async def main() -> None:
     jobs: list[tuple[TranslationDataset, str]] = [(row, "openthoughts") for row in ot3_rows] + [
         (row, "naturalreasoning") for row in nr_rows
     ]
+    if args.num_opencodereasoning > 0:
+        done_after_ot3_nr = done | {row.id for row in ot3_rows} | {row.id for row in nr_rows}
+        ocr_rows = sample_opencodereasoning_shards(
+            args.num_opencodereasoning, args.seed, done_after_ot3_nr, args.opencodereasoning_config
+        )
+        jobs += [(row, "opencodereasoning") for row in ocr_rows]
 
     logger.info(f"Translating {len(jobs)} documents ({len(done)} already done, skipped)")
 

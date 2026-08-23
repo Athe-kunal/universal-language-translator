@@ -7,6 +7,7 @@ provenance so translated units splice back into a reconstructed document.
 No translation, no embeddings, no scoring here. Segment, classify, protect.
 """
 
+import os
 import re
 import threading
 from dataclasses import dataclass, field, replace
@@ -95,7 +96,7 @@ class Unit:
     Attributes:
         unit_id: f"{doc_id}:{index:04d}".
         doc_id: Identifier of the parent document.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
         index: Contiguous index of this unit within the document, from 0.
         kind: One of heading/paragraph/list/code/math/table/quote/rule.
         text_raw: Exact source slice for this unit.
@@ -139,7 +140,7 @@ class ChunkedDocument:
 
     Attributes:
         doc_id: Identifier of the document.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
         units: Ordered translation units.
         gaps: Whitespace between unit[i] and unit[i+1]; len(gaps) == len(units) - 1.
         original_length: len(text) of the source document.
@@ -490,7 +491,7 @@ def _build_unit(
         text: The full source document (unit text is sliced from this).
         line_starts: Table from `_line_starts`.
         doc_id: Identifier of the parent document.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
         index: This unit's contiguous index within the document.
         char_start_override: If given, use this instead of the node's own
             span start — used to pull the very first unit back to 0, since
@@ -563,7 +564,7 @@ def build_units(text: str, doc_id: str, source: str) -> list[Unit]:
     Args:
         text: The source document.
         doc_id: Identifier of the document.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
 
     Returns:
         One Unit per top-level markdown block, in document order.
@@ -758,20 +759,41 @@ _SAT_DEVICE = "cpu"
 
 
 def set_sat_device(device: str) -> None:
-    """Sets the device wtpsplit's SaT model loads onto on first use.
+    """Sets the device wtpsplit's SaT model loads onto on first use, and caps
+    this process's internal thread pools to 1.
 
     CPU inference for this model is ~20-40x slower than GPU for the same
     input (measured: a batch of split-heavy documents that took 3+ minutes
     on CPU took well under 1s/doc on GPU) — worth setting explicitly to a
     free GPU for any batch run, since split_units is on the hot path for
     every oversized unit. Must be called before the first split-triggering
-    chunk_document() call; has no effect once the model is already loaded.
+    chunk_document() call; has no effect on the device once the model is
+    already loaded.
+
+    This is also the `ProcessPoolExecutor` initializer for `chunk_all` (see
+    translate_reasoning.py), which is why it caps threads here: HF
+    tokenizers' Rust threadpool and PyTorch's OpenMP threadpool each default
+    to using every core on the machine *per process*. With N worker
+    processes, that's N-way oversubscription (observed: 32 worker processes
+    x ~300 threads each on a 128-core box, load average > 1200, the whole
+    host thrashing and every process — including this one — slowed to a
+    crawl). Capping both to 1 thread per process keeps total concurrency
+    equal to the pool size, as intended.
 
     Args:
         device: e.g. "cpu", "cuda:0".
     """
     global _SAT_DEVICE
     _SAT_DEVICE = device
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("RAYON_NUM_THREADS", "1")
+    try:
+        import torch
+
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
 
 
 def _get_sat_model():
@@ -1093,11 +1115,17 @@ def _flag_recap_units(units: list[Unit]) -> None:
             unit.is_recap = True
 
 
+_DISCOURSE_MARKER_SOURCES = {"openthoughts", "opencodereasoning"}
+
+
 def _flag_discourse_markers(units: list[Unit]) -> None:
-    """Flags openthoughts units containing discourse markers ("wait", "hold
-    on", "actually", ...), mutating `has_discourse_markers` in place. These
-    need register-preserving translation instructions downstream — formal
-    Hindi renders them as stiff written prose and destroys reasoning texture.
+    """Flags units containing discourse markers ("wait", "hold on",
+    "actually", ...), mutating `has_discourse_markers` in place. These need
+    register-preserving translation instructions downstream — formal Hindi
+    renders them as stiff written prose and destroys reasoning texture.
+    Applies to sources whose CoT traces carry this stream-of-consciousness
+    texture (openthoughts, opencodereasoning); naturalreasoning uses the
+    recap heuristic instead.
 
     Args:
         units: A document's units, in order.
@@ -1112,14 +1140,14 @@ def apply_source_flags(units: list[Unit], source: str) -> list[Unit]:
 
     Args:
         units: A document's units, in order.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
 
     Returns:
         The same `units` list, for chaining.
     """
     if source == "naturalreasoning":
         _flag_recap_units(units)
-    elif source == "openthoughts":
+    elif source in _DISCOURSE_MARKER_SOURCES:
         _flag_discourse_markers(units)
     return units
 
@@ -1210,7 +1238,7 @@ def chunk_document(
     Args:
         text: The source document (English reasoning trace / response).
         doc_id: Identifier for this document.
-        source: "openthoughts" | "naturalreasoning".
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
         min_tokens: Token threshold below which paragraphs get merged.
         max_tokens: Token threshold above which units get split (fallback).
 

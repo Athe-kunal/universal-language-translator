@@ -180,6 +180,12 @@ def test_discourse_markers_not_flagged_for_naturalreasoning():
     assert doc.units[0].has_discourse_markers is False
 
 
+def test_discourse_markers_flagged_for_opencodereasoning():
+    text = "Wait, let me reconsider this whole approach before continuing further.\n"
+    doc = chunk_document(text, doc_id="doc", source="opencodereasoning")
+    assert doc.units[0].has_discourse_markers is True
+
+
 def test_orphan_fragment_between_lists_is_absorbed():
     text = "- item one\n- item two\n\nAND\n\n- item three\n- item four\n"
     doc = chunk_document(text, doc_id="doc", source="openthoughts")
