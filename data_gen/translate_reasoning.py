@@ -10,7 +10,7 @@ changes don't require touching this module.
 
 A unit whose translation degenerates into a repeated-token/phrase loop (a
 known decoding failure), drops or alters a protected placeholder, or scores
-below `--similarity_floor` on LaBSE cross-lingual embedding similarity (a
+below `--similarity_floor` on cross-lingual embedding similarity (a
 semantic-drift/hallucination signal — see the manual review that motivated
 this: some broken translations pass both the repetition and placeholder
 checks yet share almost no meaning with the source) is retried up to
@@ -28,7 +28,6 @@ import argparse
 import asyncio
 import json
 import re
-import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,8 +37,10 @@ from loguru import logger
 import httpx
 from openai import AsyncOpenAI
 
+from data_gen import segment_steps
 from data_gen.chunking import ChunkedDocument, Unit, chunk_document, reconstruct, set_sat_device
 from data_gen.datamodels import TranslationDataset
+from data_gen.embeddings import DEFAULT_EMBEDDING_MODEL, embedding_similarity
 from data_gen.sample_reasoning import (
     load_done,
     sample_natural_reasoning,
@@ -57,7 +58,6 @@ DEFAULT_RETRY_TEMPERATURE = 0.7
 DEFAULT_MIN_TOKENS = 60
 DEFAULT_MAX_TOKENS = 400
 DEFAULT_CONCURRENCY = 48
-DEFAULT_LABSE_MODEL = "sentence-transformers/LaBSE"
 DEFAULT_SIMILARITY_FLOOR = 0.5
 DEFAULT_EMBEDDING_DEVICE = "cpu"
 DEFAULT_SAT_DEVICE = "cpu"
@@ -86,20 +86,31 @@ def has_repetition(text: str) -> bool:
     return bool(_REPETITION_RE.search(text))
 
 
-def render_translate_prompt(target_language: str = DEFAULT_TARGET_LANGUAGE) -> str:
+def render_translate_prompt(
+    target_language: str = DEFAULT_TARGET_LANGUAGE, prior_context: str | None = None
+) -> str:
     """Renders the base translation system prompt.
 
     Args:
         target_language: Language to translate into.
+        prior_context: Tail end of the preceding unit's source text, shown
+            for disambiguation only (e.g. so a discourse marker like "Wait"
+            reads as a mid-reasoning interjection rather than in isolation).
+            None for a document's first unit, where there's nothing before it.
 
     Returns:
         Rendered prompt text.
     """
-    return _JINJA_ENV.get_template("translate.jinja").render(target_language=target_language)
+    return _JINJA_ENV.get_template("translate.jinja").render(
+        target_language=target_language, prior_context=prior_context
+    )
 
 
 def render_retry_prompt(
-    previous_translation: str, reason: str, target_language: str = DEFAULT_TARGET_LANGUAGE
+    previous_translation: str,
+    reason: str,
+    target_language: str = DEFAULT_TARGET_LANGUAGE,
+    prior_context: str | None = None,
 ) -> str:
     """Renders the retry system prompt, showing the previous broken attempt.
 
@@ -107,71 +118,52 @@ def render_retry_prompt(
         previous_translation: The prior attempt that failed validation.
         reason: Human-readable description of what was wrong with it.
         target_language: Language to translate into.
+        prior_context: Same as `render_translate_prompt`.
 
     Returns:
         Rendered prompt text.
     """
     return _JINJA_ENV.get_template("translate_retry.jinja").render(
-        target_language=target_language, previous_translation=previous_translation, reason=reason
+        target_language=target_language,
+        previous_translation=previous_translation,
+        reason=reason,
+        prior_context=prior_context,
     )
 
 
+_PRIOR_CONTEXT_CHARS = 100
+
+
+def get_prior_context(doc: ChunkedDocument, unit: Unit, max_chars: int = _PRIOR_CONTEXT_CHARS) -> str | None:
+    """Gets up to the last `max_chars` characters of the unit immediately
+    before this one in document order, as disambiguation context.
+
+    Uses the immediately preceding unit regardless of its `kind`/`translate`
+    status (even a code unit's tail can carry useful continuity), and always
+    the original English (never a translation), since units are translated
+    concurrently and an adjacent unit's Hindi output may not exist yet.
+
+    Args:
+        doc: The unit's parent ChunkedDocument.
+        unit: The unit about to be translated.
+        max_chars: Max characters of trailing context to include.
+
+    Returns:
+        The trailing context string, or None if this is the document's
+        first unit (nothing precedes it).
+    """
+    if unit.index == 0:
+        return None
+    prior_text = doc.units[unit.index - 1].text_raw
+    tail = prior_text[-max_chars:]
+    # Trim to a clean word boundary rather than starting mid-word.
+    space_idx = tail.find(" ")
+    if 0 <= space_idx < len(tail) - 1:
+        tail = tail[space_idx + 1 :]
+    return tail.strip() or None
+
+
 _PLACEHOLDER_RE = re.compile(r"⟦\d+⟧")
-
-_labse_model = None
-_labse_lock = threading.Lock()
-
-
-def _get_labse_model(model_name: str, device: str):
-    """Lazily loads and caches the LaBSE cross-lingual embedding model, so
-    importing this module doesn't pay the model-load cost when validation
-    is disabled (`similarity_floor <= 0`).
-
-    Guarded by a real (non-async) lock: `_encode` runs inside
-    `asyncio.to_thread`, so with concurrency > 1 many OS threads can reach
-    this function on their first call simultaneously — without the lock,
-    multiple threads racing to construct the same model onto the same
-    device corrupts the load (observed as a "meta tensor" error).
-
-    Args:
-        model_name: SentenceTransformer model name.
-        device: Device to load the model onto (e.g. "cpu", "cuda:0").
-
-    Returns:
-        A loaded `SentenceTransformer` instance.
-    """
-    global _labse_model
-    if _labse_model is None:
-        with _labse_lock:
-            if _labse_model is None:
-                from sentence_transformers import SentenceTransformer
-
-                _labse_model = SentenceTransformer(model_name, device=device)
-    return _labse_model
-
-
-async def _embedding_similarity(en_text: str, hi_text: str, model_name: str, device: str) -> float:
-    """Computes cosine similarity between source and translation embeddings.
-
-    Runs the (synchronous, GPU-or-CPU-bound) encode call in a thread so it
-    doesn't block the asyncio event loop other translation tasks are using.
-
-    Args:
-        en_text: Source text sent to the translator.
-        hi_text: Candidate translation text.
-        model_name: SentenceTransformer model name.
-        device: Device to run the model on.
-
-    Returns:
-        Cosine similarity in [-1, 1] (in practice, [0, 1]-ish for real text).
-    """
-
-    def _encode() -> float:
-        model = _get_labse_model(model_name, device)
-        embeddings = model.encode([en_text, hi_text], normalize_embeddings=True)
-        return float(embeddings[0] @ embeddings[1])
-
-    return await asyncio.to_thread(_encode)
 
 
 async def _validate(
@@ -179,7 +171,7 @@ async def _validate(
     expected_placeholders: list[str],
     en_text: str,
     similarity_floor: float,
-    labse_model: str,
+    embedding_model: str,
     embedding_device: str,
 ) -> str | None:
     """Checks a translation attempt for known defect signatures.
@@ -190,10 +182,10 @@ async def _validate(
             fingerprint expects (e.g. ["⟦0⟧", "⟦1⟧"]).
         en_text: The source text sent to the translator, for the embedding
             similarity check.
-        similarity_floor: Minimum LaBSE cosine similarity to accept; a
+        similarity_floor: Minimum embedding cosine similarity to accept; a
             non-positive value disables the check entirely (skips loading
             the embedding model at all).
-        labse_model: SentenceTransformer model name for the similarity check.
+        embedding_model: SentenceTransformer model name for the similarity check.
         embedding_device: Device to run the embedding model on.
 
     Returns:
@@ -209,7 +201,7 @@ async def _validate(
             f"got {found}. Every placeholder token must appear exactly once, unchanged"
         )
     if similarity_floor > 0:
-        similarity = await _embedding_similarity(en_text, translation, labse_model, embedding_device)
+        similarity = await embedding_similarity(en_text, translation, embedding_model, embedding_device)
         if similarity < similarity_floor:
             return (
                 "it does not accurately or completely convey the meaning of the source text "
@@ -267,8 +259,9 @@ async def translate_unit(
     retry_temperature: float = DEFAULT_RETRY_TEMPERATURE,
     target_language: str = DEFAULT_TARGET_LANGUAGE,
     similarity_floor: float = DEFAULT_SIMILARITY_FLOOR,
-    labse_model: str = DEFAULT_LABSE_MODEL,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_device: str = DEFAULT_EMBEDDING_DEVICE,
+    prior_context: str | None = None,
 ) -> UnitTranslation:
     """Translates one unit, retrying on detected repetition, placeholder loss,
     or low cross-lingual embedding similarity to the source.
@@ -282,10 +275,12 @@ async def translate_unit(
         retry_temperature: Sampling temperature for retry attempts (the
             initial attempt uses temperature=0.0 for reproducibility).
         target_language: Language to translate into.
-        similarity_floor: Minimum LaBSE cosine similarity to accept; a
+        similarity_floor: Minimum embedding cosine similarity to accept; a
             non-positive value disables the embedding check.
-        labse_model: SentenceTransformer model name for the similarity check.
+        embedding_model: SentenceTransformer model name for the similarity check.
         embedding_device: Device to run the embedding model on.
+        prior_context: Tail of the preceding unit's source text, shown to
+            the model for disambiguation only — see `get_prior_context`.
 
     Returns:
         The final UnitTranslation, with retry/erroneous-attempt provenance.
@@ -294,7 +289,7 @@ async def translate_unit(
         unit rather than accept a known-broken translation.
     """
     expected_placeholders = sorted(set(span.placeholder for span in unit.spans))
-    base_prompt = render_translate_prompt(target_language)
+    base_prompt = render_translate_prompt(target_language, prior_context)
     previous_translation: str | None = None
     translation = ""
     reason: str | None = None
@@ -303,7 +298,7 @@ async def translate_unit(
         system_prompt = (
             base_prompt
             if attempt == 0
-            else render_retry_prompt(previous_translation, reason, target_language)
+            else render_retry_prompt(previous_translation, reason, target_language, prior_context)
         )
         async with sem:
             resp = await client.chat.completions.create(
@@ -313,7 +308,7 @@ async def translate_unit(
                     {"role": "user", "content": unit.text_protected},
                 ],
                 temperature=0.0 if attempt == 0 else retry_temperature,
-                max_tokens=1024,
+                max_tokens=2048,
             )
         translation = (resp.choices[0].message.content or "").strip()
         reason = await _validate(
@@ -321,7 +316,7 @@ async def translate_unit(
             expected_placeholders,
             unit.text_protected,
             similarity_floor,
-            labse_model,
+            embedding_model,
             embedding_device,
         )
         if reason is None:
@@ -354,12 +349,13 @@ async def _translate_and_log_unit(
     retry_temperature: float,
     target_language: str,
     similarity_floor: float,
-    labse_model: str,
+    embedding_model: str,
     embedding_device: str,
     doc_id: str,
     source: str,
     units_fh,
     write_lock: asyncio.Lock,
+    prior_context: str | None = None,
 ) -> UnitTranslation:
     """Translates one unit and immediately appends its record to `units_fh`,
     so per-chunk results are visible on disk as soon as each unit finishes
@@ -374,8 +370,9 @@ async def _translate_and_log_unit(
         retry_temperature,
         target_language,
         similarity_floor,
-        labse_model,
+        embedding_model,
         embedding_device,
+        prior_context,
     )
     if units_fh is not None:
         await _write_jsonl(
@@ -406,7 +403,7 @@ async def translate_document(
     retry_temperature: float = DEFAULT_RETRY_TEMPERATURE,
     target_language: str = DEFAULT_TARGET_LANGUAGE,
     similarity_floor: float = DEFAULT_SIMILARITY_FLOOR,
-    labse_model: str = DEFAULT_LABSE_MODEL,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_device: str = DEFAULT_EMBEDDING_DEVICE,
     units_fh=None,
     write_lock: asyncio.Lock | None = None,
@@ -423,9 +420,9 @@ async def translate_document(
         max_retries: Max retry attempts per unit.
         retry_temperature: Sampling temperature for retry attempts.
         target_language: Language to translate into.
-        similarity_floor: Minimum LaBSE cosine similarity to accept; a
+        similarity_floor: Minimum embedding cosine similarity to accept; a
             non-positive value disables the embedding check.
-        labse_model: SentenceTransformer model name for the similarity check.
+        embedding_model: SentenceTransformer model name for the similarity check.
         embedding_device: Device to run the embedding model on.
         units_fh: Open file handle to append per-unit records to as soon as
             each one finishes (incremental, chunk-level persistence). None
@@ -448,12 +445,13 @@ async def translate_document(
                 retry_temperature,
                 target_language,
                 similarity_floor,
-                labse_model,
+                embedding_model,
                 embedding_device,
                 doc.doc_id,
                 doc.source,
                 units_fh,
                 write_lock,
+                get_prior_context(doc, unit),
             )
             for unit in translatable
         )
@@ -574,7 +572,7 @@ async def process_document(
         args.retry_temperature,
         args.target_language,
         args.similarity_floor,
-        args.labse_model,
+        args.embedding_model,
         args.embedding_device,
         units_fh,
         write_lock,
@@ -667,6 +665,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_tokens", type=int, default=DEFAULT_MIN_TOKENS)
     parser.add_argument("--max_tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument(
+        "--min_step_tokens",
+        type=int,
+        default=segment_steps.DEFAULT_MIN_STEP_TOKENS,
+        help="Below this size, a step keeps extending regardless of semantic-break signal "
+        "(structural/discourse-marker/token-cap boundaries still apply) (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--max_step_tokens",
+        type=int,
+        default=segment_steps.DEFAULT_MAX_STEP_TOKENS,
+        help="Hard cap on step size, a final safety net regardless of boundary signal "
+        "(default: %(default)s).",
+    )
+    parser.add_argument(
+        "--semantic_percentile",
+        type=float,
+        default=segment_steps.DEFAULT_SEMANTIC_PERCENTILE,
+        help="Bottom percentile of each document's own adjacent-unit similarity distribution "
+        "treated as a semantic-jump step boundary (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--min_units_for_semantic",
+        type=int,
+        default=segment_steps.DEFAULT_MIN_UNITS_FOR_SEMANTIC,
+        help="Minimum unit count in a translatable run before the semantic-break fallback "
+        "applies at all (default: %(default)s).",
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=DEFAULT_CONCURRENCY,
@@ -676,14 +702,14 @@ def parse_args() -> argparse.Namespace:
         "--similarity_floor",
         type=float,
         default=DEFAULT_SIMILARITY_FLOOR,
-        help="Minimum LaBSE cosine similarity between source and translation to accept "
+        help="Minimum embedding cosine similarity between source and translation to accept "
         "without retrying; <= 0 disables the embedding check entirely (default: %(default)s).",
     )
-    parser.add_argument("--labse_model", default=DEFAULT_LABSE_MODEL)
+    parser.add_argument("--embedding_model", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument(
         "--embedding_device",
         default=DEFAULT_EMBEDDING_DEVICE,
-        help="Device for the LaBSE model (e.g. cpu, cuda:0) — pick a GPU that isn't already "
+        help="Device for the embedding model (e.g. cpu, cuda:0) — pick a GPU that isn't already "
         "busy serving the translation model (default: %(default)s).",
     )
     parser.add_argument(
@@ -742,6 +768,25 @@ async def main() -> None:
 
     logger.info("Pre-chunking all documents (one-time CPU/GPU-bound pass before any translation traffic)...")
     chunked_jobs = chunk_all(jobs, args.min_tokens, args.max_tokens, max_workers=args.chunk_workers)
+
+    logger.info("Regrouping chunks into whole reasoning steps for translation (embedding semantic-break pass)...")
+    chunked_jobs = [
+        (
+            row,
+            source,
+            segment_steps.regroup_chunked_document(
+                doc,
+                row.cot_answer,
+                args.min_step_tokens,
+                args.max_step_tokens,
+                args.semantic_percentile,
+                args.min_units_for_semantic,
+                args.embedding_model,
+                args.embedding_device,
+            ),
+        )
+        for row, source, doc in chunked_jobs
+    ]
 
     args.output_file.parent.mkdir(parents=True, exist_ok=True)
     args.units_output_file.parent.mkdir(parents=True, exist_ok=True)

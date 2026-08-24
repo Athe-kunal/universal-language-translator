@@ -1,20 +1,28 @@
-"""Groups translated chunking units into coherent reasoning "steps" for
-process-reward-model-style training data.
+"""Groups chunking units into coherent reasoning "steps" for process-reward-
+model-style training data — usable two ways:
 
-Pure post-processing: reads the per-unit records already written by
-`translate_reasoning.py` (`translated_reasoning_25k_units.jsonl`), regroups
-each document's units (currently sentence/paragraph-level, sized for
-translation-call accuracy, not for standalone training examples) into larger
-step-level spans, and writes one record per step. No LLM calls.
+1. Post-processing (`segment_document`, and this module's CLI): reads the
+   per-unit records already written by `translate_reasoning.py`
+   (`translated_reasoning_25k_units.jsonl`), regroups each document's
+   already-translated units into step-level spans. No LLM calls.
+2. Pre-translation (`group_units_into_steps` / `regroup_chunked_document`):
+   the same boundary logic applied to a freshly-chunked, not-yet-translated
+   `chunking.ChunkedDocument`, so `translate_reasoning.py` sends whole steps
+   to the translator instead of small AST-level chunks. This is the
+   preferred path for new translation runs — a step usually carries its own
+   local context (a discourse marker like "Wait" reads correctly because the
+   sentence before it is in the same translation call), which chunk-level
+   translation structurally can't provide.
 
 Boundary detection, in priority order:
   1. Structural: a `kind == "heading"` unit always starts a new step.
-  2. Discourse marker: a unit (openthoughts only) whose text opens with a
+  2. Discourse marker: a unit (openthoughts/opencodereasoning only — see
+     `_DISCOURSE_MARKER_SOURCES`) whose text opens with a
      reasoning-pivot phrase ("Wait,", "Actually,", "Hold on,", ...) starts a
      new step — these mark a deliberate shift in the reasoning, the same
      signal `chunking.py` already flags per-unit.
   3. Semantic fallback: for stretches with no structural/discourse signal,
-     LaBSE-embeds each unit's English text and breaks where adjacent-unit
+     embeds each unit's English text and breaks where adjacent-unit
      cosine similarity drops into the document's own bottom percentile (a
      document-adaptive "meaning jump" detector, only once the current step
      already has >= --min_step_tokens, so it fine-tunes long stretches
@@ -35,7 +43,8 @@ import numpy as np
 import tiktoken
 from loguru import logger
 
-from data_gen.translate_reasoning import DEFAULT_LABSE_MODEL, _get_labse_model
+from data_gen.chunking import ChunkedDocument, Unit, _assert_invariants, _compute_stats, _merge_group
+from data_gen.embeddings import DEFAULT_EMBEDDING_MODEL, get_embedding_model
 
 DEFAULT_UNITS_FILE = Path("translated_reasoning_25k_units.jsonl")
 DEFAULT_OUTPUT_FILE = Path("reasoning_steps.jsonl")
@@ -134,36 +143,45 @@ def _adjacent_similarities(units: list[UnitRecord], model_name: str, device: str
 
     Args:
         units: A document's units, in order.
-        model_name: SentenceTransformer model name (LaBSE).
+        model_name: SentenceTransformer model name (jina-embeddings-v3).
         device: Device to run the embedding model on.
 
     Returns:
         Array of length len(units) - 1; entry i is sim(units[i], units[i+1]).
     """
-    model = _get_labse_model(model_name, device)
+    model = get_embedding_model(model_name, device)
     embeddings = model.encode([u.en for u in units], normalize_embeddings=True)
     return np.array([float(embeddings[i] @ embeddings[i + 1]) for i in range(len(units) - 1)])
 
 
 def _boundary_reason(
-    unit: UnitRecord,
+    kind: str,
+    source: str,
+    text: str,
     prev_similarity: float | None,
     semantic_threshold: float | None,
     current_step_tokens: int,
     min_step_tokens: int,
     max_step_tokens: int,
 ) -> str | None:
-    """Decides whether a new step should start right before `unit`.
+    """Decides whether a new step should start right before a candidate unit.
+
+    Takes plain scalar fields (rather than a unit object) so the same
+    boundary logic works both post-hoc, on already-translated `UnitRecord`s
+    (see `segment_document`), and pre-translation, on `chunking.Unit`s
+    (see `group_units_into_steps`) — one decision function either way.
 
     Args:
-        unit: The candidate unit to start a new step at.
+        kind: The candidate unit's `kind` (e.g. "heading", "paragraph").
+        source: "openthoughts" | "naturalreasoning" | "opencodereasoning".
+        text: The candidate unit's English text.
         prev_similarity: Cosine similarity between the previous unit and
-            `unit`, or None if not computed for this document.
+            this one, or None if not computed for this document.
         semantic_threshold: This document's bottom-percentile similarity
             threshold, or None if the semantic fallback isn't applicable
             (too few units).
         current_step_tokens: Token count accumulated in the in-progress step
-            so far (before adding `unit`).
+            so far (before adding this unit).
         min_step_tokens: Floor below which only structural/discourse signals
             can trigger a break (the semantic fallback is suppressed).
         max_step_tokens: Hard cap; always triggers a break once reached,
@@ -172,9 +190,9 @@ def _boundary_reason(
     Returns:
         A boundary reason string, or None to keep extending the current step.
     """
-    if unit.kind == "heading":
+    if kind == "heading":
         return "heading"
-    if unit.source in _DISCOURSE_MARKER_SOURCES and _DISCOURSE_MARKER_START_RE.match(unit.en):
+    if source in _DISCOURSE_MARKER_SOURCES and _DISCOURSE_MARKER_START_RE.match(text):
         return "discourse_marker"
     if current_step_tokens >= max_step_tokens:
         return "token_cap"
@@ -194,7 +212,7 @@ def segment_document(
     max_step_tokens: int,
     semantic_percentile: float,
     min_units_for_semantic: int,
-    labse_model: str,
+    embedding_model: str,
     embedding_device: str,
 ) -> list[Step]:
     """Segments one document's units into coherent PRM-style steps.
@@ -207,7 +225,7 @@ def segment_document(
             adjacent-similarity distribution treated as a "meaning jump".
         min_units_for_semantic: Minimum unit count for the semantic fallback
             to apply at all (too few units gives an unreliable percentile).
-        labse_model: SentenceTransformer model name for the semantic fallback.
+        embedding_model: SentenceTransformer model name for the semantic fallback.
         embedding_device: Device to run the embedding model on.
 
     Returns:
@@ -219,7 +237,7 @@ def segment_document(
     similarities: np.ndarray | None = None
     threshold: float | None = None
     if len(units) >= min_units_for_semantic:
-        similarities = _adjacent_similarities(units, labse_model, embedding_device)
+        similarities = _adjacent_similarities(units, embedding_model, embedding_device)
         threshold = float(np.percentile(similarities, semantic_percentile))
 
     steps: list[Step] = []
@@ -230,7 +248,7 @@ def segment_document(
         current_tokens = sum(_count_tokens(u.en) for u in current)
         prev_similarity = float(similarities[i - 1]) if similarities is not None else None
         reason = _boundary_reason(
-            unit, prev_similarity, threshold, current_tokens, min_step_tokens, max_step_tokens
+            unit.kind, unit.source, unit.en, prev_similarity, threshold, current_tokens, min_step_tokens, max_step_tokens
         )
         if reason is not None:
             steps.append(_finalize_step(current, len(steps), current_reason))
@@ -268,6 +286,192 @@ def _finalize_step(units: list[UnitRecord], step_index: int, boundary_reason: st
     )
 
 
+def _group_run_into_steps(
+    run: list[Unit],
+    min_step_tokens: int,
+    max_step_tokens: int,
+    semantic_percentile: float,
+    min_units_for_semantic: int,
+    embedding_model: str,
+    embedding_device: str,
+) -> list[list[Unit]]:
+    """Applies the same step-boundary decision as `segment_document`, to a
+    contiguous run of translatable `chunking.Unit`s (pre-translation).
+
+    Args:
+        run: Consecutive translatable units (no code/math/rule units mixed
+            in — the caller splits on those first, see `group_units_into_steps`).
+        min_step_tokens: Passed through to `_boundary_reason`.
+        max_step_tokens: Passed through to `_boundary_reason`.
+        semantic_percentile: Passed through to `_boundary_reason`'s threshold.
+        min_units_for_semantic: Minimum run length before the semantic
+            fallback applies at all.
+        embedding_model: SentenceTransformer model name for the semantic fallback.
+        embedding_device: Device to run the embedding model on.
+
+    Returns:
+        Groups of consecutive units, each to become one merged step-unit.
+    """
+    if not run:
+        return []
+
+    similarities: np.ndarray | None = None
+    threshold: float | None = None
+    if len(run) >= min_units_for_semantic:
+        model = get_embedding_model(embedding_model, embedding_device)
+        embeddings = model.encode([u.text_raw for u in run], normalize_embeddings=True)
+        similarities = np.array([float(embeddings[i] @ embeddings[i + 1]) for i in range(len(run) - 1)])
+        threshold = float(np.percentile(similarities, semantic_percentile))
+
+    groups: list[list[Unit]] = []
+    current = [run[0]]
+    for i in range(1, len(run)):
+        unit = run[i]
+        current_tokens = sum(_count_tokens(u.text_raw) for u in current)
+        prev_similarity = float(similarities[i - 1]) if similarities is not None else None
+        reason = _boundary_reason(
+            unit.kind,
+            unit.source,
+            unit.text_raw,
+            prev_similarity,
+            threshold,
+            current_tokens,
+            min_step_tokens,
+            max_step_tokens,
+        )
+        if reason is not None:
+            groups.append(current)
+            current = [unit]
+        else:
+            current.append(unit)
+    groups.append(current)
+    return groups
+
+
+def group_units_into_steps(
+    units: list[Unit],
+    text: str,
+    min_step_tokens: int = DEFAULT_MIN_STEP_TOKENS,
+    max_step_tokens: int = DEFAULT_MAX_STEP_TOKENS,
+    semantic_percentile: float = DEFAULT_SEMANTIC_PERCENTILE,
+    min_units_for_semantic: int = DEFAULT_MIN_UNITS_FOR_SEMANTIC,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_device: str = DEFAULT_EMBEDDING_DEVICE,
+) -> list[Unit]:
+    """Regroups a document's chunking units into step-sized units, BEFORE
+    translation — so each unit sent to the translator is a whole coherent
+    reasoning step (heading/discourse-marker/semantic-break boundaries, the
+    same logic as `segment_document`) rather than a small AST-level chunk.
+
+    This directly addresses the main reason small isolated chunks translate
+    badly: a chunk starting mid-thought (e.g. on a bare "Wait," with no
+    surrounding sentence) gives the model nothing to disambiguate register
+    or word sense from. A step already contains its own local context for
+    most of its content; combined with `translate_reasoning.get_prior_context`
+    (a little context from the previous step, for the boundary-word case),
+    this covers both within-step and cross-step ambiguity.
+
+    Non-translatable units (`kind` in code/math/rule) are left untouched and
+    never merged across — a run of translatable units is only ever grouped
+    with its own kind.
+
+    Args:
+        units: A document's units, in order (from `chunking.build_units` /
+            `merge_units` / `split_units` — i.e. `chunk_document`'s output
+            before gaps/stats are computed).
+        text: The full source document the units were sliced from (needed
+            to re-slice and re-protect each merged step).
+        min_step_tokens: Passed through to `_boundary_reason`.
+        max_step_tokens: Passed through to `_boundary_reason`.
+        semantic_percentile: Passed through to `_boundary_reason`'s threshold.
+        min_units_for_semantic: Minimum run length before the semantic
+            fallback applies at all.
+        embedding_model: SentenceTransformer model name for the semantic fallback.
+        embedding_device: Device to run the embedding model on.
+
+    Returns:
+        Units with translatable runs merged into step-sized units,
+        reindexed contiguously from 0 (same contract as `chunking.merge_units`).
+    """
+    result: list[Unit] = []
+    i = 0
+    n = len(units)
+    while i < n:
+        if not units[i].translate:
+            result.append(units[i])
+            i += 1
+            continue
+        run = []
+        while i < n and units[i].translate:
+            run.append(units[i])
+            i += 1
+        groups = _group_run_into_steps(
+            run, min_step_tokens, max_step_tokens, semantic_percentile, min_units_for_semantic, embedding_model, embedding_device
+        )
+        for group in groups:
+            result.append(_merge_group(group, text) if len(group) > 1 else group[0])
+
+    for index, unit in enumerate(result):
+        unit.index = index
+        unit.unit_id = f"{unit.doc_id}:{index:04d}"
+    return result
+
+
+def regroup_chunked_document(
+    doc: ChunkedDocument,
+    text: str,
+    min_step_tokens: int = DEFAULT_MIN_STEP_TOKENS,
+    max_step_tokens: int = DEFAULT_MAX_STEP_TOKENS,
+    semantic_percentile: float = DEFAULT_SEMANTIC_PERCENTILE,
+    min_units_for_semantic: int = DEFAULT_MIN_UNITS_FOR_SEMANTIC,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_device: str = DEFAULT_EMBEDDING_DEVICE,
+) -> ChunkedDocument:
+    """Rebuilds a `ChunkedDocument` with its units grouped into steps.
+
+    `chunk_document`'s own gaps/stats/invariants are computed against its
+    original (small, AST-level) unit list, so they're stale once units are
+    regrouped — this recomputes them against the new step-level units and
+    re-validates the same hard invariants (byte-exact reconstruction, no
+    dropped/duplicated placeholders), rather than trusting the regrouping
+    blindly.
+
+    Args:
+        doc: A `ChunkedDocument` from `chunk_document`, not yet translated.
+        text: The full source document `doc` was chunked from.
+        min_step_tokens: Passed through to `group_units_into_steps`.
+        max_step_tokens: Passed through to `group_units_into_steps`.
+        semantic_percentile: Passed through to `group_units_into_steps`.
+        min_units_for_semantic: Passed through to `group_units_into_steps`.
+        embedding_model: SentenceTransformer model name for the semantic fallback.
+        embedding_device: Device to run the embedding model on.
+
+    Returns:
+        A new `ChunkedDocument`, its units grouped into steps.
+    """
+    units = group_units_into_steps(
+        doc.units,
+        text,
+        min_step_tokens,
+        max_step_tokens,
+        semantic_percentile,
+        min_units_for_semantic,
+        embedding_model,
+        embedding_device,
+    )
+    gaps = [text[units[i].char_end : units[i + 1].char_start] for i in range(len(units) - 1)]
+    regrouped = ChunkedDocument(
+        doc_id=doc.doc_id,
+        source=doc.source,
+        units=units,
+        gaps=gaps,
+        original_length=doc.original_length,
+        stats=_compute_stats(units),
+    )
+    _assert_invariants(text, regrouped)
+    return regrouped
+
+
 def parse_args() -> argparse.Namespace:
     """Parses command-line arguments.
 
@@ -286,7 +490,7 @@ def parse_args() -> argparse.Namespace:
         help="Bottom percentile of each document's own adjacent-unit similarity "
         "distribution treated as a semantic-jump boundary (default: %(default)s).",
     )
-    parser.add_argument("--labse_model", default=DEFAULT_LABSE_MODEL)
+    parser.add_argument("--embedding_model", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--embedding_device", default=DEFAULT_EMBEDDING_DEVICE)
     parser.add_argument(
         "--min_units_for_semantic",
@@ -314,7 +518,7 @@ def main() -> None:
                 args.max_step_tokens,
                 args.semantic_percentile,
                 args.min_units_for_semantic,
-                args.labse_model,
+                args.embedding_model,
                 args.embedding_device,
             )
             for step in steps:

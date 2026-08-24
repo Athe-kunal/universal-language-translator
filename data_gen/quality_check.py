@@ -1,9 +1,11 @@
 """Spot-checks translated units via multilingual embedding similarity.
 
 A QA aid, not a pipeline gate: cosine similarity between a unit's English
-text_protected and its Hindi translation via LaBSE, a model built for
-cross-lingual bitext similarity. Flags the lowest-scoring units for manual
-review — it does not retry or reject anything itself.
+text_protected and its Hindi translation via the same embedding model the
+pipeline validates translations with (`data_gen.embeddings`, currently
+jina-embeddings-v3 — see `reward_metric_experiment.md` for why it replaced
+LaBSE). Flags the lowest-scoring units for manual review — it does not retry
+or reject anything itself.
 
 Caveats (see the chunking-fallback design discussion this was born from):
 - Similarity is pooled over the whole unit, so a single dropped clause inside
@@ -16,7 +18,7 @@ Caveats (see the chunking-fallback design discussion this was born from):
   and expect real, complete translations to still score well below 1.0.
 
 Usage:
-    uv run python data_gen/quality_check.py --units_file translated_reasoning_units.jsonl --bottom_n 30
+    uv run python -m data_gen.quality_check --units_file translated_reasoning_units.jsonl --bottom_n 30
 """
 
 import argparse
@@ -24,9 +26,10 @@ import json
 from pathlib import Path
 
 from loguru import logger
-from sentence_transformers import SentenceTransformer
 
-DEFAULT_MODEL = "sentence-transformers/LaBSE"
+from data_gen.embeddings import DEFAULT_EMBEDDING_MODEL, get_embedding_model
+
+DEFAULT_MODEL = DEFAULT_EMBEDDING_MODEL
 DEFAULT_BATCH_SIZE = 64
 
 
@@ -51,14 +54,12 @@ def load_units(units_file: Path) -> list[dict]:
     return records
 
 
-def compute_similarities(
-    records: list[dict], model: SentenceTransformer, batch_size: int = DEFAULT_BATCH_SIZE
-) -> list[float]:
+def compute_similarities(records: list[dict], model, batch_size: int = DEFAULT_BATCH_SIZE) -> list[float]:
     """Computes cosine similarity between each record's `en` and `hi` text.
 
     Args:
         records: Unit records with `en` and `hi` fields.
-        model: A loaded SentenceTransformer (e.g. LaBSE).
+        model: A loaded SentenceTransformer (e.g. jina-embeddings-v3).
         batch_size: Encoding batch size.
 
     Returns:
@@ -66,8 +67,14 @@ def compute_similarities(
     """
     en_texts = [r["en"] for r in records]
     hi_texts = [r["hi"] for r in records]
-    en_emb = model.encode(en_texts, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True)
-    hi_emb = model.encode(hi_texts, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=True)
+    encode_kwargs = {"batch_size": batch_size, "normalize_embeddings": True, "show_progress_bar": True}
+    try:
+        en_emb = model.encode(en_texts, task="text-matching", **encode_kwargs)
+        hi_emb = model.encode(hi_texts, task="text-matching", **encode_kwargs)
+    except TypeError:
+        # Models without task-specific LoRA heads (e.g. LaBSE) don't accept `task`.
+        en_emb = model.encode(en_texts, **encode_kwargs)
+        hi_emb = model.encode(hi_texts, **encode_kwargs)
     return (en_emb * hi_emb).sum(axis=1).tolist()
 
 
@@ -105,14 +112,14 @@ def main() -> None:
     logger.info(f"Loaded {len(records)} translated units from {args.units_file}")
 
     logger.info(f"Loading {args.model} on {args.device}...")
-    model = SentenceTransformer(args.model, device=args.device)
+    model = get_embedding_model(args.model, args.device)
 
     similarities = compute_similarities(records, model, args.batch_size)
     for record, sim in zip(records, similarities):
-        record["labse_similarity"] = sim
+        record["embedding_similarity"] = sim
 
-    ranked = sorted(records, key=lambda r: r["labse_similarity"])
-    sims_sorted = [r["labse_similarity"] for r in ranked]
+    ranked = sorted(records, key=lambda r: r["embedding_similarity"])
+    sims_sorted = [r["embedding_similarity"] for r in ranked]
     n = len(sims_sorted)
     logger.info(
         f"similarity stats: min={sims_sorted[0]:.3f} p10={sims_sorted[n // 10]:.3f} "
@@ -122,7 +129,7 @@ def main() -> None:
     bottom = ranked[: args.bottom_n]
     print(f"\n--- {len(bottom)} lowest-similarity units (for manual review, not auto-rejected) ---")
     for r in bottom:
-        print(f"\n[{r['doc_id'][:10]} / {r['unit_id']}] sim={r['labse_similarity']:.3f}")
+        print(f"\n[{r['doc_id'][:10]} / {r['unit_id']}] sim={r['embedding_similarity']:.3f}")
         print("EN:", r["en"][:300])
         print("HI:", r["hi"][:300])
 
