@@ -1,11 +1,11 @@
 """Composite RL reward for English-Hindi translation.
 
-Wired into miles via --custom-rm-path (see rl/run_qwen3_0_6b_bpcc_fsdp.py).
+Wired into miles via --custom-rm-path (see rl/run_qwen3_0_6b_bpcc_fsdp.sh).
 """
 
 import os
 
-from data_gen.embeddings import DEFAULT_EMBEDDING_MODEL, embedding_similarity
+from rl.embeddings import DEFAULT_EMBEDDING_MODEL, embedding_similarity
 from rl.reward_components import language_switch_penalty, repetition_penalty
 
 REWARD_EMBEDDING_MODEL = os.environ.get("RL_REWARD_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)

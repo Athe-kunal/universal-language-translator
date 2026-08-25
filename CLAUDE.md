@@ -46,7 +46,7 @@ uv run pytest -m slow             # slow/integration tests
 
 ### RL (GRPO) translation training via Miles
 ```bash
-make rl-venv                      # one-time: creates .venv-miles, installs miles-rl + the "rl" dependency group
+make rl-venv                      # one-time: clones radixark/miles into .miles, creates .venv-miles, installs it + the "rl" dependency group
 make dataset                      # -> bpcc_hin_deva.jsonl (if not already present)
 make rl-dataset                   # -> bpcc_rl_train.jsonl / bpcc_rl_eval.jsonl
 make rl-train-bpcc                # launches GRPO training
@@ -87,10 +87,10 @@ Local editable package providing the masked diffusion infrastructure:
 GRPO fine-tuning of the plain autoregressive `Qwen/Qwen3-0.6B` (not the dllm a2d/MDLM checkpoints above) via [Miles](https://github.com/radixark/miles) — sglang for rollout generation, FSDP2 for the actor, on AI4Bharat's BPCC English→Hindi data.
 
 - **`rl/prepare_bpcc_rl_data.py`** — Converts `bpcc_hin_deva.jsonl` (`src`/`tgt`) into miles's prompt/label JSONL format (`bpcc_rl_{train,eval}.jsonl`): each row's `prompt` wraps the English source in a translation instruction, `label` is the BPCC Hindi reference.
-- **`rl/reward.py`** — `custom_rm(args, sample)`, wired in via miles's `--custom-rm-path` hook. Reward = jina-embeddings-v3 cosine similarity between the generated Hindi and the BPCC reference, discounted by two penalties from `rl/reward_components.py`: `repetition_penalty()` (degenerate/looping generation) and `language_switch_penalty()` (non-Devanagari, non-numeric tokens).
-- **`rl/run_qwen3_0_6b_bpcc_fsdp.py`** — miles launch script (mirrors miles's own `scripts/run_qwen3_0_6b_fsdp.py`), single-node sglang + FSDP2, GRPO.
+- **`rl/reward.py`** — `custom_rm(args, sample)`, wired in via miles's `--custom-rm-path` hook. Reward = jina-embeddings-v3 cosine similarity (via `rl/embeddings.py`, a standalone copy of `data_gen/embeddings.py`'s logic so `rl/` doesn't depend on anything outside its own venv) between the generated Hindi and the BPCC reference, discounted by two penalties from `rl/reward_components.py`: `repetition_penalty()` (degenerate/looping generation) and `language_switch_penalty()` (non-Devanagari, non-numeric tokens).
+- **`rl/run_qwen3_0_6b_bpcc_fsdp.sh`** — miles launch script: a plain bash equivalent of miles's own `scripts/run_qwen3_0_6b_fsdp.py` (`ray start --head` + `ray job submit -- python3 train.py <flags>`), single-node sglang + FSDP2, GRPO.
 
-**Runs in its own venv** (`.venv-miles`, via `make rl-venv`): miles pins `transformers==5.x`, which conflicts with this project's `transformers<5.0` (required by `dllm`/MDLM). Run miles with `PYTHONPATH=.` from the repo root so `rl` and `data_gen` are importable. sglang and a matching torch/CUDA build aren't installed by `make rl-venv`; follow miles's own install docs for your hardware.
+**Runs in its own venv** (`.venv-miles`, via `make rl-venv`, which also clones `radixark/miles` into `.miles`): miles pins `transformers==5.x`, which conflicts with this project's `transformers<5.0` (required by `dllm`/MDLM). `make rl-train-bpcc` puts `.venv-miles/bin` on `PATH` and passes `MILES_REPO=.miles` to the script. sglang and a matching torch/CUDA build aren't installed by `make rl-venv`; follow miles's own install docs for your hardware.
 
 ### Environment variables (`.env`)
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` — translation inference endpoint

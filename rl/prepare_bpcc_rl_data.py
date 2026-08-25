@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_records(input_file: Path) -> list[dict]:
+def build_records(input_file: Path) -> list[dict[str, str]]:
     """Reads src/tgt JSONL rows into miles prompt/label records.
 
     Args:
@@ -46,13 +46,13 @@ def build_records(input_file: Path) -> list[dict]:
     Returns:
         Records shaped {"prompt": ..., "label": ...}.
     """
-    records = []
+    records: list[dict[str, str]] = []
     with open(input_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            ex = json.loads(line)
+            ex: dict = json.loads(line)
             src, tgt = ex.get("src"), ex.get("tgt")
             if not src or not tgt:
                 continue
@@ -61,16 +61,18 @@ def build_records(input_file: Path) -> list[dict]:
 
 
 def main() -> None:
-    args = parse_args()
-    records = build_records(args.input_file)
+    args: argparse.Namespace = parse_args()
+    records: list[dict[str, str]] = build_records(args.input_file)
     if not records:
         raise SystemExit(f"No usable src/tgt rows found in {args.input_file}")
 
-    shuffled = records[:]
+    shuffled: list[dict[str, str]] = records[:]
     random.Random(args.seed).shuffle(shuffled)
-    n_eval = max(1, int(len(shuffled) * args.eval_split)) if args.eval_split > 0 else 0
+    n_eval: int = max(1, int(len(shuffled) * args.eval_split)) if args.eval_split > 0 else 0
     eval_records, train_records = shuffled[:n_eval], shuffled[n_eval:]
 
+    path: Path
+    recs: list[dict[str, str]]
     for path, recs in ((args.train_output, train_records), (args.eval_output, eval_records)):
         with open(path, "w", encoding="utf-8") as f:
             for rec in recs:
