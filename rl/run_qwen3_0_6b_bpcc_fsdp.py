@@ -1,26 +1,13 @@
-"""Miles GRPO launch script: Qwen3-0.6B on BPCC English->Hindi translation,
+"""Miles GRPO launch script: Qwen3-0.6B on BPCC English-Hindi translation,
 sglang rollout + FSDP2 actor, single node.
 
-Mirrors miles's own scripts/run_qwen3_0_6b_fsdp.py (dapo-math-17k, rule-based
-math grading) with the reward model swapped for this project's translation
-reward (rl/reward.py's custom_rm - jina-embeddings-v3 similarity against the
-BPCC reference, penalized for degenerate/repeated generation and non-numeric
-language switching) and the prompt dataset swapped for BPCC.
+Run in the miles venv (`make rl-venv`), not this project's main one - miles
+pins transformers==5.x, incompatible with dllm's transformers<5.0.
 
-Runs in its own venv, separate from this repo's main one: miles pins
-transformers==5.x, which conflicts with this project's dllm/MDLM stack
-(transformers<5.0, see pyproject.toml) - same isolation precedent as the
-COMET/MetricX venv described in reward_metric_experiment.md. See `make
-rl-venv` / `make rl-train-bpcc` in the Makefile.
-
-Prerequisites (see Makefile targets `dataset` and `rl-dataset`):
-    uv run python data_gen/download_bpcc.py           # -> bpcc_hin_deva.jsonl
-    uv run python -m rl.prepare_bpcc_rl_data           # -> bpcc_rl_{train,eval}.jsonl
-
-Usage (from the repo root, so `rl` and `data_gen` are importable - miles's
---custom-rm-path does `load_function("rl.reward.custom_rm")` inside its own
-rollout worker processes):
-    PYTHONPATH=. python3 rl/run_qwen3_0_6b_bpcc_fsdp.py
+Usage:
+    uv run python data_gen/download_bpcc.py
+    uv run python -m rl.prepare_bpcc_rl_data
+    PYTHONPATH=. .venv-miles/bin/python rl/run_qwen3_0_6b_bpcc_fsdp.py
 """
 
 import os
@@ -67,9 +54,6 @@ def execute(args: ScriptArgs):
         f"--num-rollout {args.num_rollout} "
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
-        # Sentence/short-paragraph Hindi translations, not long-form math
-        # reasoning - the upstream math script's 4096 would just waste
-        # rollout budget generating past where a translation ends.
         "--rollout-max-response-len 512 "
         "--rollout-temperature 1 "
         "--global-batch-size 256 "
@@ -103,9 +87,6 @@ def execute(args: ScriptArgs):
         "--adam-beta2 0.98 "
     )
 
-    # No --wandb-key on purpose: exec_command_cpu prints the full command
-    # line, so the trainer must pick up WANDB_API_KEY from its inherited
-    # environment instead.
     wandb_args = (
         f"--use-wandb --wandb-project {args.wandb_project} --wandb-group {WANDB_GROUP} "
         if os.environ.get("WANDB_API_KEY")

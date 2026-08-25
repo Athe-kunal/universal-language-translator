@@ -211,27 +211,18 @@ vllm-ps: # List running vllm-server containers.
 vllm-logs: # Tail logs for a vllm server. NAME=<container> (required).
 	docker logs -f "$(NAME)"
 
-###
-# RL (GRPO) translation training via Miles (https://github.com/radixark/miles):
-# sglang rollout + FSDP2 actor, reward from rl/reward.py (jina-embeddings-v3
-# similarity to the BPCC reference, penalized for degenerate/repeated
-# generation and non-numeric language switching - see rl/reward.py and
-# rl/reward_components.py). Runs Qwen/Qwen3-0.6B (plain AR, not the
-# dllm a2d/MDLM checkpoints the targets above train) in its OWN venv,
-# separate from this project's main uv-managed one: miles pins
-# transformers==5.x, which conflicts with dllm's transformers<5.0 - same
-# isolation precedent as the COMET/MetricX venv in
-# reward_metric_experiment.md.
-###
+# RL (GRPO) translation training via Miles (https://github.com/radixark/miles),
+# Qwen/Qwen3-0.6B on BPCC - runs in its own venv (miles pins transformers==5.x,
+# incompatible with dllm's transformers<5.0). See CLAUDE.md for details.
 MILES_VENV      ?= .venv-miles
 MILES_RL_SCRIPT ?= rl/run_qwen3_0_6b_bpcc_fsdp.py
 
 .PHONY: rl-venv
-rl-venv: # One-time setup: creates $(MILES_VENV) and installs miles-rl + rl/requirements.txt into it. Still need sglang + a matching torch/CUDA build for your hardware - see https://github.com/radixark/miles for install instructions, this target doesn't pin those for you.
+rl-venv: # One-time setup: creates $(MILES_VENV), installs miles-rl + the "rl" dependency group. Still need sglang + a matching torch/CUDA build - see https://github.com/radixark/miles.
 	python3 -m venv $(MILES_VENV)
 	$(MILES_VENV)/bin/pip install -U pip
 	$(MILES_VENV)/bin/pip install miles-rl
-	$(MILES_VENV)/bin/pip install -r rl/requirements.txt
+	uv pip install --python $(MILES_VENV)/bin/python --group rl
 
 .PHONY: rl-dataset
 rl-dataset: # Builds bpcc_rl_{train,eval}.jsonl from bpcc_hin_deva.jsonl (run `make dataset` first if that doesn't exist yet).

@@ -1,10 +1,4 @@
-"""Tests for the pure-Python reward penalty signals in rl.reward_components.
-
-Deliberately excludes rl.reward itself: that module pulls in
-sentence-transformers to load jina-embeddings-v3 (see data_gen/embeddings.py),
-which is heavyweight and network-dependent - not something a fast unit test
-suite should pay for.
-"""
+"""Tests for rl.reward_components."""
 
 from rl.reward_components import language_switch_penalty, repetition_penalty
 
@@ -15,8 +9,6 @@ def test_repetition_penalty_clean_text_is_zero():
 
 
 def test_repetition_penalty_short_text_is_zero():
-    # Below the n-gram floor and no hard-loop match - too little text to
-    # judge repetitiveness from, so it shouldn't be penalized.
     assert repetition_penalty("नमस्ते दुनिया") == 0.0
 
 
@@ -26,9 +18,6 @@ def test_repetition_penalty_short_phrase_loop_is_max():
 
 
 def test_repetition_penalty_longer_loop_is_partial_not_max():
-    # A 6-token phrase repeated twice: outside the hard regex's 1-5 token
-    # window (so it doesn't hit the 1.0 case), but still repetitive enough
-    # that the n-gram ratio should catch it.
     phrase = "अ ब स द ई फ"
     text = " ".join([phrase, phrase, "जी हाँ बिलकुल सही बात है"])
     penalty = repetition_penalty(text)

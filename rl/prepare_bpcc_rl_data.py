@@ -1,13 +1,4 @@
-"""Builds a miles-format prompt/label JSONL for RL translation training from
-AI4Bharat's BPCC hin_Deva split (see data_gen/download_bpcc.py, which must
-be run first to produce the input file this reads).
-
-miles's rollout Dataset reads each JSONL row's --input-key field as the
-prompt text (wrapped in a user turn and passed through the model's chat
-template when the launch script sets --apply-chat-template, as
-rl/run_qwen3_0_6b_bpcc_fsdp.py does) and its --label-key field into
-Sample.label, which rl/reward.py compares the model's Hindi generation
-against.
+"""Builds a miles prompt/label JSONL from AI4Bharat's BPCC hin_Deva split.
 
 Usage:
     uv run python -m rl.prepare_bpcc_rl_data
@@ -41,24 +32,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input_file", type=Path, default=DEFAULT_INPUT_FILE)
     parser.add_argument("--train_output", type=Path, default=DEFAULT_TRAIN_OUTPUT)
     parser.add_argument("--eval_output", type=Path, default=DEFAULT_EVAL_OUTPUT)
-    parser.add_argument(
-        "--eval_split",
-        type=float,
-        default=0.02,
-        help="Fraction of examples held out for --eval-prompt-data (default: %(default)s).",
-    )
+    parser.add_argument("--eval_split", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
 def build_records(input_file: Path) -> list[dict]:
-    """Reads a bpcc_hin_deva.jsonl-style file into miles prompt/label rows.
+    """Reads src/tgt JSONL rows into miles prompt/label records.
 
     Args:
         input_file: Path to a JSONL file with "src"/"tgt" fields per line.
 
     Returns:
-        Records shaped `{"prompt": ..., "label": ...}`.
+        Records shaped {"prompt": ..., "label": ...}.
     """
     records = []
     with open(input_file, encoding="utf-8") as f:
