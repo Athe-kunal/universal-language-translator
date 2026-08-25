@@ -211,4 +211,26 @@ vllm-ps: # List running vllm-server containers.
 vllm-logs: # Tail logs for a vllm server. NAME=<container> (required).
 	docker logs -f "$(NAME)"
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc
+# RL (GRPO) translation training via Miles (https://github.com/radixark/miles),
+# Qwen/Qwen3-0.6B on BPCC - runs in its own venv (miles pins transformers==5.x,
+# incompatible with dllm's transformers<5.0). See CLAUDE.md for details.
+MILES_VENV ?= .venv-miles
+MILES_REPO ?= .miles
+
+.PHONY: rl-venv
+rl-venv: # One-time setup: clones radixark/miles into $(MILES_REPO), creates $(MILES_VENV), installs it editable + the "rl" dependency group. Still need sglang + a matching torch/CUDA build - see https://github.com/radixark/miles.
+	[ -d $(MILES_REPO) ] || git clone --depth 1 https://github.com/radixark/miles.git $(MILES_REPO)
+	python3 -m venv $(MILES_VENV)
+	$(MILES_VENV)/bin/pip install -U pip
+	$(MILES_VENV)/bin/pip install -e $(MILES_REPO)
+	uv pip install --python $(MILES_VENV)/bin/python --group rl
+
+.PHONY: rl-dataset
+rl-dataset: # Builds bpcc_rl_{train,eval}.jsonl from bpcc_hin_deva.jsonl (run `make dataset` first if that doesn't exist yet).
+	uv run python -m rl.prepare_bpcc_rl_data
+
+.PHONY: rl-train-bpcc
+rl-train-bpcc: # Launches GRPO training (rl-venv and rl-dataset must have been run first).
+	PATH="$(MILES_VENV)/bin:$$PATH" MILES_REPO=$(MILES_REPO) bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
+
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-train-bpcc
