@@ -44,6 +44,15 @@ uv run pytest tests/test_foo.py   # single file
 uv run pytest -m slow             # slow/integration tests
 ```
 
+### RL (GRPO) translation training via Miles
+```bash
+make rl-venv                      # one-time: creates .venv-miles, installs miles-rl + rl/requirements.txt
+make dataset                      # -> bpcc_hin_deva.jsonl (if not already present)
+make rl-dataset                   # -> bpcc_rl_train.jsonl / bpcc_rl_eval.jsonl
+make rl-train-bpcc                # launches GRPO training
+```
+See "RL training (`rl/`)" below — this is a separate track from the MDLM SFT pipeline above (different backend, different venv, different base model).
+
 ## Architecture
 
 ### Data pipeline
@@ -72,6 +81,18 @@ Local editable package providing the masked diffusion infrastructure:
 - `dllm.core.samplers` — `MDLMSampler`, `MDLMSamplerConfig`
 - `dllm.core.schedulers` — Noise schedules
 - `dllm.utils` — `get_model()`, `get_tokenizer()`, `default_sft_map_fn()`, `post_process_dataset()`, collators (`NoAttentionMaskWrapper`, `DataCollatorForSeq2Seq`)
+
+### RL training (`rl/`)
+
+GRPO fine-tuning of the plain autoregressive `Qwen/Qwen3-0.6B` (not the dllm a2d/MDLM checkpoints above) via [Miles](https://github.com/radixark/miles) — sglang for rollout generation, FSDP2 for the actor, on AI4Bharat's BPCC English→Hindi data.
+
+- **`rl/prepare_bpcc_rl_data.py`** — Converts `bpcc_hin_deva.jsonl` (`src`/`tgt`) into miles's prompt/label JSONL format (`bpcc_rl_{train,eval}.jsonl`): each row's `prompt` wraps the English source in a translation instruction, `label` is the BPCC Hindi reference.
+- **`rl/reward.py`** — `custom_rm(args, sample)`, wired in via miles's `--custom-rm-path` hook. Reward = jina-embeddings-v3 cosine similarity between the generated Hindi and the BPCC reference (see `reward_metric_experiment.md` for why jina-v3 over LaBSE), multiplicatively discounted by two penalties from `rl/reward_components.py`:
+  - `repetition_penalty()` — degenerate/looping generation (reuses `data_gen/translate_reasoning.py`'s short-phrase-repeat signature as a hard 1.0 case, plus a softer n-gram-diversity signal).
+  - `language_switch_penalty()` — fraction of non-Devanagari, non-numeric tokens (i.e. English/Latin-script leakage; numerals are always exempt).
+- **`rl/run_qwen3_0_6b_bpcc_fsdp.py`** — miles launch script (mirrors miles's own `scripts/run_qwen3_0_6b_fsdp.py`), single-node sglang + FSDP2, GRPO.
+
+**Runs in its own venv** (`.venv-miles`, via `make rl-venv`): miles pins `transformers==5.x`, which conflicts with this project's `transformers<5.0` (required by `dllm`/MDLM) — same isolation precedent as the COMET/MetricX venv in `reward_metric_experiment.md`. `rl/reward.py` still imports `data_gen.embeddings` (must be importable from that venv, so run miles with `PYTHONPATH=.` from the repo root — see the module docstrings). sglang itself and a matching torch/CUDA build aren't installed by `make rl-venv`; follow miles's own install docs for your hardware.
 
 ### Environment variables (`.env`)
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` — translation inference endpoint
