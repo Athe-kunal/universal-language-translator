@@ -232,13 +232,16 @@ rl-dataset: # Builds bpcc_rl_{train,eval}.jsonl from bpcc_hin_deva.jsonl (run `m
 # in the main uv venv, not inside the miles venv/container - jina-embeddings-v3's
 # custom remote code needs transformers<5.0 (this project's pin), while miles
 # needs transformers==5.x. See rl/reward_server.py.
-RL_REWARD_SERVER_PORT   ?= 8090
-RL_REWARD_SERVER_DEVICE ?= cuda:1
-RL_REWARD_SERVER_PID    ?= .rl-reward-server.pid
+RL_REWARD_SERVER_PORT        ?= 8090
+RL_REWARD_SERVER_DEVICE      ?= cuda:1
+RL_REWARD_SERVER_CONCURRENCY ?= 8
+RL_REWARD_SERVER_PID         ?= .rl-reward-server.pid
 
 .PHONY: rl-reward-server-up
 rl-reward-server-up: # Starts rl/reward_server.py in the background on RL_REWARD_SERVER_PORT (default device: RL_REWARD_SERVER_DEVICE, the rollout gpu in this box's split-placement config).
-	RL_REWARD_EMBEDDING_DEVICE=$(RL_REWARD_SERVER_DEVICE) uv run uvicorn rl.reward_server:app \
+	RL_REWARD_EMBEDDING_DEVICE=$(RL_REWARD_SERVER_DEVICE) \
+	RL_REWARD_EMBEDDING_CONCURRENCY=$(RL_REWARD_SERVER_CONCURRENCY) \
+	uv run uvicorn rl.reward_server:app \
 		--host 0.0.0.0 --port $(RL_REWARD_SERVER_PORT) \
 		> rl-reward-server.log 2>&1 & echo $$! > $(RL_REWARD_SERVER_PID)
 	@echo "Reward server starting on port $(RL_REWARD_SERVER_PORT) (pid $$(cat $(RL_REWARD_SERVER_PID))); logs: rl-reward-server.log"

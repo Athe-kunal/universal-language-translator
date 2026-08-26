@@ -13,7 +13,10 @@ import httpx
 from rl.reward_components import language_switch_penalty, repetition_penalty
 
 REWARD_SERVER_URL = os.environ.get("RL_REWARD_SERVER_URL", "http://127.0.0.1:8090/similarity")
-_client = httpx.AsyncClient(timeout=30.0)
+# rollout/eval batches can fan out to hundreds of concurrent custom_rm calls;
+# the server throttles actual GPU work via its own concurrency cap, so
+# requests queue there rather than failing - give them room to wait it out.
+_client = httpx.AsyncClient(timeout=120.0, limits=httpx.Limits(max_connections=1000))
 
 
 async def _embedding_similarity(text_a: str, text_b: str) -> float:
