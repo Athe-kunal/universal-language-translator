@@ -22,6 +22,13 @@
 #   MASTER_ADDR         127.0.0.1
 #   WANDB_PROJECT       universal-language-translator-rl
 #   WANDB_API_KEY       unset -> wandb logging disabled
+#   COLOCATE            1 -> rollout + actor share all NUM_GPUS_PER_NODE gpus.
+#                       0 -> actor gets 1 gpu, rollout gets the rest, and
+#                       rl/reward.py's embedding model runs on the rollout
+#                       gpu (RL_REWARD_EMBEDDING_DEVICE) instead of cpu.
+#   SGLANG_ATTENTION_BACKEND  flashinfer (fa3 needs Hopper; A100 has no TMA)
+#   ATTN_IMPLEMENTATION       flash_attention_2 (flash_attention_3 needs Hopper)
+#   SGLANG_MEM_FRACTION_STATIC  0.75 colocated / 0.9 split
 set -euo pipefail
 
 : "${MILES_REPO:?set MILES_REPO to a radixark/miles checkout (see \`make rl-venv\`)}"
@@ -33,6 +40,23 @@ NUM_ROLLOUT="${NUM_ROLLOUT:-200}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 WANDB_PROJECT="${WANDB_PROJECT:-universal-language-translator-rl}"
 WANDB_GROUP="qwen3-0.6b-fsdp-bpcc-translation"
+COLOCATE="${COLOCATE:-1}"
+SGLANG_ATTENTION_BACKEND="${SGLANG_ATTENTION_BACKEND:-flashinfer}"
+ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-flash_attention_2}"
+
+if [[ "$COLOCATE" == "1" ]]; then
+  ACTOR_NUM_GPUS_PER_NODE="$NUM_GPUS_PER_NODE"
+  PLACEMENT_ARGS=(--colocate)
+  SGLANG_MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.75}"
+else
+  ACTOR_NUM_GPUS_PER_NODE=1
+  ROLLOUT_NUM_GPUS=$((NUM_GPUS_PER_NODE - 1))
+  PLACEMENT_ARGS=(--rollout-num-gpus "$ROLLOUT_NUM_GPUS")
+  SGLANG_MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.9}"
+  # Rollout lands on the gpu(s) after the actor's (see miles's
+  # placement_group.py: rollout_offset = actor_num_gpus when not colocated).
+  export RL_REWARD_EMBEDDING_DEVICE="${RL_REWARD_EMBEDDING_DEVICE:-cuda:$ACTOR_NUM_GPUS_PER_NODE}"
+fi
 
 HF_REPO="Qwen/Qwen3-0.6B"
 MODEL_PATH="$MODEL_DIR/Qwen3-0.6B"
@@ -61,14 +85,14 @@ TRAIN_ARGS=(
   --adam-beta1 0.9 --adam-beta2 0.98
   "${WANDB_ARGS[@]}"
   --rollout-num-gpus-per-engine 1 --sglang-decode-log-interval 1000
-  --sglang-mem-fraction-static 0.75 --sglang-attention-backend fa3
+  --sglang-mem-fraction-static "$SGLANG_MEM_FRACTION" --sglang-attention-backend "$SGLANG_ATTENTION_BACKEND"
   --sglang-chunked-prefill-size 4096
   --train-backend fsdp --update-weight-buffer-size 536870912
-  --gradient-checkpointing --attn-implementation flash_attention_3
+  --gradient-checkpointing --attn-implementation "$ATTN_IMPLEMENTATION"
   --train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}'
   --use-dynamic-batch-size --max-tokens-per-gpu 9216
-  --actor-num-nodes 1 --actor-num-gpus-per-node "$NUM_GPUS_PER_NODE"
-  --colocate --use-fault-tolerance
+  --actor-num-nodes 1 --actor-num-gpus-per-node "$ACTOR_NUM_GPUS_PER_NODE"
+  "${PLACEMENT_ARGS[@]}" --use-fault-tolerance
 )
 
 pkill -9 sglang || true

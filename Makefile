@@ -240,24 +240,32 @@ rl-train-bpcc: # Launches GRPO training (rl-venv and rl-dataset must have been r
 MILES_IMAGE     ?= radixark/miles:latest
 RL_DOCKER_IMAGE ?= miles-rl:latest
 
+# Defaults reflect this box's working config: 2x A100, split placement.
+RL_GPU_IDS           ?= 0,1
+RL_NUM_GPUS_PER_NODE ?= 2
+RL_COLOCATE          ?= 0
+
 .PHONY: rl-docker-build
 rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE) + the "rl" dependency group.
 	docker build -t $(RL_DOCKER_IMAGE) --build-arg MILES_IMAGE=$(MILES_IMAGE) \
 		-f docker/Dockerfile.miles-rl docker
 
 .PHONY: rl-docker-train-bpcc
-rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build and rl-dataset must have been run first). Optional: GPU_IDS, and the script's own env knobs (NUM_GPUS_PER_NODE, NUM_ROLLOUT, WANDB_API_KEY, ...).
-	docker run --rm -it \
+rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build and rl-dataset must have been run first). Defaults to this box's working 2x A100 split-placement config (RL_GPU_IDS, RL_NUM_GPUS_PER_NODE, RL_COLOCATE); also forwards the script's own env knobs (NUM_ROLLOUT, WANDB_API_KEY, SGLANG_ATTENTION_BACKEND, ATTN_IMPLEMENTATION, ...) - see rl/run_qwen3_0_6b_bpcc_fsdp.sh header.
+	docker run --rm \
 		--runtime nvidia --gpus all \
 		--ipc host --network host \
 		--security-opt label=disable \
-		$(if $(GPU_IDS),-e CUDA_VISIBLE_DEVICES=$(GPU_IDS)) \
+		-e CUDA_VISIBLE_DEVICES=$(RL_GPU_IDS) \
 		-v "$(CURDIR):/workspace" -w /workspace \
 		-v "$$HOME/.cache/huggingface:/root/.cache/huggingface" \
 		-e MILES_REPO=/root/miles \
 		-e HF_TOKEN -e WANDB_API_KEY -e WANDB_PROJECT \
 		-e MODEL_DIR -e TRAIN_DATA -e EVAL_DATA \
-		-e NUM_GPUS_PER_NODE -e NUM_ROLLOUT -e MASTER_ADDR \
+		-e NUM_GPUS_PER_NODE="$(RL_NUM_GPUS_PER_NODE)" -e COLOCATE="$(RL_COLOCATE)" \
+		-e NUM_ROLLOUT -e MASTER_ADDR \
+		-e SGLANG_ATTENTION_BACKEND -e ATTN_IMPLEMENTATION \
+		-e SGLANG_MEM_FRACTION_STATIC -e RL_REWARD_EMBEDDING_DEVICE \
 		$(RL_DOCKER_IMAGE) \
 		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 

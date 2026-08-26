@@ -13,6 +13,30 @@ _EMBEDDING_TASK = "text-matching"
 
 _embedding_model = None
 _embedding_lock = threading.Lock()
+_patched_tied_weights = False
+
+
+def _patch_tied_weights_compat():
+    """jina-embeddings-v3's cached remote code (XLMRobertaLoRA) never calls
+    self.post_init(), so transformers>=5's PreTrainedModel.all_tied_weights_keys
+    (set there, see modeling_utils.py) is never attached, and loading crashes
+    with AttributeError. Model is inference-only here, so falling back to an
+    empty dict (skip nothing on tied-weight bookkeeping) is safe.
+    """
+    global _patched_tied_weights
+    if _patched_tied_weights:
+        return
+    from transformers.modeling_utils import PreTrainedModel
+
+    original_getattr = PreTrainedModel.__getattr__
+
+    def patched_getattr(self, name):
+        if name == "all_tied_weights_keys":
+            return {}
+        return original_getattr(self, name)
+
+    PreTrainedModel.__getattr__ = patched_getattr
+    _patched_tied_weights = True
 
 
 def get_embedding_model(model_name: str, device: str):
@@ -29,6 +53,7 @@ def get_embedding_model(model_name: str, device: str):
     if _embedding_model is None:
         with _embedding_lock:
             if _embedding_model is None:
+                _patch_tied_weights_compat()
                 from sentence_transformers import SentenceTransformer
 
                 _embedding_model = SentenceTransformer(model_name, trust_remote_code=True, device=device)
