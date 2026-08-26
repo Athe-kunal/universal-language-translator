@@ -233,4 +233,32 @@ rl-dataset: # Builds bpcc_rl_{train,eval}.jsonl from bpcc_hin_deva.jsonl (run `m
 rl-train-bpcc: # Launches GRPO training (rl-venv and rl-dataset must have been run first).
 	PATH="$(MILES_VENV)/bin:$$PATH" MILES_REPO=$(MILES_REPO) bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-train-bpcc
+# Containerized alternative to rl-venv/rl-train-bpcc, for hosts where pip
+# can't install miles's nvidia-resiliency-ext~=0.6.0 pin (manylinux_2_39
+# wheels need glibc >=2.39). Uses radixark/miles's own published image
+# instead of building that stack from source. See docker/Dockerfile.miles-rl.
+MILES_IMAGE     ?= radixark/miles:latest
+RL_DOCKER_IMAGE ?= miles-rl:latest
+
+.PHONY: rl-docker-build
+rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE) + the "rl" dependency group.
+	docker build -t $(RL_DOCKER_IMAGE) --build-arg MILES_IMAGE=$(MILES_IMAGE) \
+		-f docker/Dockerfile.miles-rl docker
+
+.PHONY: rl-docker-train-bpcc
+rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build and rl-dataset must have been run first). Optional: GPU_IDS, and the script's own env knobs (NUM_GPUS_PER_NODE, NUM_ROLLOUT, WANDB_API_KEY, ...).
+	docker run --rm -it \
+		--runtime nvidia --gpus all \
+		--ipc host --network host \
+		--security-opt label=disable \
+		$(if $(GPU_IDS),-e CUDA_VISIBLE_DEVICES=$(GPU_IDS)) \
+		-v "$(CURDIR):/workspace" -w /workspace \
+		-v "$$HOME/.cache/huggingface:/root/.cache/huggingface" \
+		-e MILES_REPO=/root/miles \
+		-e HF_TOKEN -e WANDB_API_KEY -e WANDB_PROJECT \
+		-e MODEL_DIR -e TRAIN_DATA -e EVAL_DATA \
+		-e NUM_GPUS_PER_NODE -e NUM_ROLLOUT -e MASTER_ADDR \
+		$(RL_DOCKER_IMAGE) \
+		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
+
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-train-bpcc rl-docker-build rl-docker-train-bpcc
