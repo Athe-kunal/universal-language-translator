@@ -266,6 +266,7 @@ RL_GPU_IDS           ?= 0,1
 RL_NUM_GPUS_PER_NODE ?= 2
 RL_COLOCATE          ?= 0
 RL_REWARD_SERVER_URL ?= http://127.0.0.1:$(RL_REWARD_SERVER_PORT)/similarity
+RL_CHECKPOINT_DIR    ?= $(CURDIR)/.rl-checkpoints
 
 .PHONY: rl-docker-build
 rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE). See docker/Dockerfile.miles-rl.
@@ -273,7 +274,8 @@ rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE). See docker/Doc
 		-f docker/Dockerfile.miles-rl docker
 
 .PHONY: rl-docker-train-bpcc
-rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build, rl-dataset, and rl-reward-server-up must have been run first). Defaults to this box's working 2x A100 split-placement config (RL_GPU_IDS, RL_NUM_GPUS_PER_NODE, RL_COLOCATE); also forwards the script's own env knobs (NUM_ROLLOUT, WANDB_API_KEY, SGLANG_ATTENTION_BACKEND, ATTN_IMPLEMENTATION, ...) - see rl/run_qwen3_0_6b_bpcc_fsdp.sh header.
+rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build, rl-dataset, and rl-reward-server-up must have been run first). Defaults to this box's working 2x A100 split-placement config (RL_GPU_IDS, RL_NUM_GPUS_PER_NODE, RL_COLOCATE); also forwards the script's own env knobs (NUM_ROLLOUT, SAVE_INTERVAL, WANDB_API_KEY, SGLANG_ATTENTION_BACKEND, ATTN_IMPLEMENTATION, ...) - see rl/run_qwen3_0_6b_bpcc_fsdp.sh header. Weight-only checkpoints (no optimizer state) land in RL_CHECKPOINT_DIR on the host, since the container is --rm'd on exit.
+	mkdir -p "$(RL_CHECKPOINT_DIR)"
 	docker run --rm \
 		--runtime nvidia --gpus all \
 		--ipc host --network host \
@@ -281,11 +283,12 @@ rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-
 		-e CUDA_VISIBLE_DEVICES=$(RL_GPU_IDS) \
 		-v "$(CURDIR):/workspace" -w /workspace \
 		-v "$$HOME/.cache/huggingface:/root/.cache/huggingface" \
+		-v "$(RL_CHECKPOINT_DIR):/root/checkpoints" \
 		-e MILES_REPO=/root/miles \
 		-e HF_TOKEN -e WANDB_API_KEY -e WANDB_PROJECT \
 		-e MODEL_DIR -e TRAIN_DATA -e EVAL_DATA \
 		-e NUM_GPUS_PER_NODE="$(RL_NUM_GPUS_PER_NODE)" -e COLOCATE="$(RL_COLOCATE)" \
-		-e NUM_ROLLOUT -e MASTER_ADDR \
+		-e NUM_ROLLOUT -e MASTER_ADDR -e SAVE_DIR -e SAVE_INTERVAL \
 		-e SGLANG_ATTENTION_BACKEND -e ATTN_IMPLEMENTATION \
 		-e SGLANG_MEM_FRACTION_STATIC \
 		-e RL_REWARD_SERVER_URL="$(RL_REWARD_SERVER_URL)" \

@@ -21,6 +21,9 @@
 #   NUM_GPUS_PER_NODE   4
 #   NUM_ROLLOUT         200
 #   MASTER_ADDR         127.0.0.1
+#   SAVE_DIR            /root/checkpoints - weight-only (--no-save-optim), so mount it to a
+#                       host path or the run's checkpoints vanish with the container.
+#   SAVE_INTERVAL       20 (rollouts between checkpoints)
 #   WANDB_PROJECT       universal-language-translator-rl
 #   WANDB_API_KEY       unset -> wandb logging disabled
 #   COLOCATE            1 -> rollout + actor share all NUM_GPUS_PER_NODE gpus.
@@ -38,6 +41,8 @@ EVAL_DATA="${EVAL_DATA:-bpcc_rl_eval.jsonl}"
 NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-4}"
 NUM_ROLLOUT="${NUM_ROLLOUT:-200}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+SAVE_DIR="${SAVE_DIR:-/root/checkpoints}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-20}"
 WANDB_PROJECT="${WANDB_PROJECT:-universal-language-translator-rl}"
 WANDB_GROUP="qwen3-0.6b-fsdp-bpcc-translation"
 COLOCATE="${COLOCATE:-1}"
@@ -73,6 +78,7 @@ TRAIN_ARGS=(
   --apply-chat-template --apply-chat-template-kwargs '{"enable_thinking": false}'
   --rollout-shuffle --balance-data
   --custom-rm-path rl.reward.custom_rm
+  --save "$SAVE_DIR" --save-interval "$SAVE_INTERVAL" --no-save-optim
   --num-rollout "$NUM_ROLLOUT" --rollout-batch-size 32 --n-samples-per-prompt 8
   --rollout-max-response-len 512 --rollout-temperature 1 --global-batch-size 256
   --eval-interval 500 --eval-prompt-data bpcc "$EVAL_DATA"
