@@ -70,7 +70,8 @@ fi
 TRAIN_ARGS=(
   --hf-checkpoint "$MODEL_PATH" --ref-load "$MODEL_PATH"
   --prompt-data "$TRAIN_DATA" --input-key prompt --label-key label
-  --apply-chat-template --rollout-shuffle --balance-data
+  --apply-chat-template --apply-chat-template-kwargs '{"enable_thinking": false}'
+  --rollout-shuffle --balance-data
   --custom-rm-path rl.reward.custom_rm
   --num-rollout "$NUM_ROLLOUT" --rollout-batch-size 32 --n-samples-per-prompt 8
   --rollout-max-response-len 512 --rollout-temperature 1 --global-batch-size 256
