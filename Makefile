@@ -219,7 +219,7 @@ MILES_REPO ?= .miles
 
 .PHONY: rl-venv
 rl-venv: # One-time setup: clones radixark/miles into $(MILES_REPO), creates $(MILES_VENV), installs it editable. Still need sglang + a matching torch/CUDA build - see https://github.com/radixark/miles.
-	[ -d $(MILES_REPO) ] || git clone --depth 1 https://github.com/radixark/miles.git $(MILES_REPO)
+	[ -f $(MILES_REPO)/pyproject.toml ] || git clone --depth 1 https://github.com/radixark/miles.git $(MILES_REPO)
 	python3 -m venv $(MILES_VENV)
 	$(MILES_VENV)/bin/pip install -U pip
 	$(MILES_VENV)/bin/pip install -e $(MILES_REPO)

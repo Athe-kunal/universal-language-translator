@@ -22,6 +22,8 @@ _EMBEDDING_TASK = "text-matching"
 
 _embedding_model = None
 _embedding_lock = threading.Lock()
+# Serializes encode() calls too: jina-embeddings-v3's rotary-embedding cache isn't thread-safe.
+_encode_lock = threading.Lock()
 
 
 def get_embedding_model(model_name: str, device: str):
@@ -83,7 +85,8 @@ async def embedding_similarity(text_a: str, text_b: str, model_name: str, device
 
     def _run() -> float:
         model = get_embedding_model(model_name, device)
-        embeddings = _encode(model, [text_a, text_b])
+        with _encode_lock:
+            embeddings = _encode(model, [text_a, text_b])
         return float(embeddings[0] @ embeddings[1])
 
     return await asyncio.to_thread(_run)

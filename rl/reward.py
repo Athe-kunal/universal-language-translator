@@ -6,6 +6,7 @@ started with `make rl-reward-server-up`) over HTTP rather than loaded here -
 see that module's docstring for why.
 """
 
+import asyncio
 import os
 
 import httpx
@@ -17,12 +18,24 @@ REWARD_SERVER_URL = os.environ.get("RL_REWARD_SERVER_URL", "http://127.0.0.1:809
 # the server throttles actual GPU work via its own concurrency cap, so
 # requests queue there rather than failing - give them room to wait it out.
 _client = httpx.AsyncClient(timeout=120.0, limits=httpx.Limits(max_connections=1000))
+_MAX_RETRIES = 3
 
 
 async def _embedding_similarity(text_a: str, text_b: str) -> float:
-    response = await _client.post(REWARD_SERVER_URL, json={"text_a": text_a, "text_b": text_b})
-    response.raise_for_status()
-    return response.json()["similarity"]
+    # A single dropped connection out of a large eval fan-out shouldn't kill
+    # a multi-hour training run - retry transient network errors before
+    # letting one propagate up and crash the job.
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = await _client.post(
+                REWARD_SERVER_URL, json={"text_a": text_a, "text_b": text_b}
+            )
+            response.raise_for_status()
+            return response.json()["similarity"]
+        except httpx.TransportError:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            await asyncio.sleep(2**attempt)
 
 
 async def custom_rm(args, sample) -> float:
