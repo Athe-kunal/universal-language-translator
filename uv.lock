@@ -1747,11 +1747,6 @@ dev = [
     { name = "pytest" },
     { name = "streamlit" },
 ]
-rl = [
-    { name = "einops" },
-    { name = "loguru" },
-    { name = "sentence-transformers" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -1803,11 +1798,6 @@ provides-extras = ["cpu", "gpu"]
 dev = [
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "streamlit", specifier = ">=1.57.0" },
-]
-rl = [
-    { name = "einops", specifier = ">=0.8.2" },
-    { name = "loguru", specifier = ">=0.7.3" },
-    { name = "sentence-transformers", specifier = ">=5.7.0" },
 ]
 
 [[package]]

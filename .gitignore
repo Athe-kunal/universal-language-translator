@@ -227,3 +227,5 @@ wandb/
 .claude-config/
 
 .venv-miles
+
+.claude

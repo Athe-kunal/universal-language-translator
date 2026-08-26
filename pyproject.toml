@@ -50,18 +50,6 @@ dev = [
     "pytest>=8.0.0",
     "streamlit>=1.57.0",
 ]
-# Installed into the separate miles venv (.venv-miles, via `make rl-venv`)
-# alongside `miles-rl` itself - not into the main uv-managed environment.
-# Kept as an explicit group (rather than relying on these already being
-# base `dependencies` today) so rl/reward.py's actual runtime needs stay
-# declared even if the base list changes independently. See
-# rl/run_qwen3_0_6b_bpcc_fsdp.py's module docstring for why miles needs its
-# own venv (transformers==5.x vs. this project's transformers<5.0).
-rl = [
-    "sentence-transformers>=5.7.0",
-    "einops>=0.8.2",
-    "loguru>=0.7.3",
-]
 
 [tool.pytest.ini_options]
 markers = [

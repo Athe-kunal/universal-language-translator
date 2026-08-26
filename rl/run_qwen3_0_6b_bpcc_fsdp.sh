@@ -9,6 +9,7 @@
 # Prerequisites:
 #   uv run python data_gen/download_bpcc.py
 #   uv run python -m rl.prepare_bpcc_rl_data
+#   make rl-reward-server-up   # scores rl/reward.py's custom_rm over HTTP
 #
 # Required:
 #   MILES_REPO         path to a `radixark/miles` checkout (has train.py at its root)
@@ -23,12 +24,11 @@
 #   WANDB_PROJECT       universal-language-translator-rl
 #   WANDB_API_KEY       unset -> wandb logging disabled
 #   COLOCATE            1 -> rollout + actor share all NUM_GPUS_PER_NODE gpus.
-#                       0 -> actor gets 1 gpu, rollout gets the rest, and
-#                       rl/reward.py's embedding model runs on the rollout
-#                       gpu (RL_REWARD_EMBEDDING_DEVICE) instead of cpu.
+#                       0 -> actor gets 1 gpu, rollout gets the rest.
 #   SGLANG_ATTENTION_BACKEND  flashinfer (fa3 needs Hopper; A100 has no TMA)
 #   ATTN_IMPLEMENTATION       flash_attention_2 (flash_attention_3 needs Hopper)
-#   SGLANG_MEM_FRACTION_STATIC  0.75 colocated / 0.9 split
+#   SGLANG_MEM_FRACTION_STATIC  0.75 both colocated and split (leaves room
+#                       for the reward server sharing the rollout gpu)
 set -euo pipefail
 
 : "${MILES_REPO:?set MILES_REPO to a radixark/miles checkout (see \`make rl-venv\`)}"
@@ -52,10 +52,7 @@ else
   ACTOR_NUM_GPUS_PER_NODE=1
   ROLLOUT_NUM_GPUS=$((NUM_GPUS_PER_NODE - 1))
   PLACEMENT_ARGS=(--rollout-num-gpus "$ROLLOUT_NUM_GPUS")
-  SGLANG_MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.9}"
-  # Rollout lands on the gpu(s) after the actor's (see miles's
-  # placement_group.py: rollout_offset = actor_num_gpus when not colocated).
-  export RL_REWARD_EMBEDDING_DEVICE="${RL_REWARD_EMBEDDING_DEVICE:-cuda:$ACTOR_NUM_GPUS_PER_NODE}"
+  SGLANG_MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.75}"
 fi
 
 HF_REPO="Qwen/Qwen3-0.6B"

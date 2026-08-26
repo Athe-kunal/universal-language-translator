@@ -218,19 +218,37 @@ MILES_VENV ?= .venv-miles
 MILES_REPO ?= .miles
 
 .PHONY: rl-venv
-rl-venv: # One-time setup: clones radixark/miles into $(MILES_REPO), creates $(MILES_VENV), installs it editable + the "rl" dependency group. Still need sglang + a matching torch/CUDA build - see https://github.com/radixark/miles.
+rl-venv: # One-time setup: clones radixark/miles into $(MILES_REPO), creates $(MILES_VENV), installs it editable. Still need sglang + a matching torch/CUDA build - see https://github.com/radixark/miles.
 	[ -d $(MILES_REPO) ] || git clone --depth 1 https://github.com/radixark/miles.git $(MILES_REPO)
 	python3 -m venv $(MILES_VENV)
 	$(MILES_VENV)/bin/pip install -U pip
 	$(MILES_VENV)/bin/pip install -e $(MILES_REPO)
-	uv pip install --python $(MILES_VENV)/bin/python --group rl
 
 .PHONY: rl-dataset
 rl-dataset: # Builds bpcc_rl_{train,eval}.jsonl from bpcc_hin_deva.jsonl (run `make dataset` first if that doesn't exist yet).
 	uv run python -m rl.prepare_bpcc_rl_data
 
+# Reward scoring (rl/reward.py's custom_rm) runs as a separate HTTP server
+# in the main uv venv, not inside the miles venv/container - jina-embeddings-v3's
+# custom remote code needs transformers<5.0 (this project's pin), while miles
+# needs transformers==5.x. See rl/reward_server.py.
+RL_REWARD_SERVER_PORT   ?= 8090
+RL_REWARD_SERVER_DEVICE ?= cuda:1
+RL_REWARD_SERVER_PID    ?= .rl-reward-server.pid
+
+.PHONY: rl-reward-server-up
+rl-reward-server-up: # Starts rl/reward_server.py in the background on RL_REWARD_SERVER_PORT (default device: RL_REWARD_SERVER_DEVICE, the rollout gpu in this box's split-placement config).
+	RL_REWARD_EMBEDDING_DEVICE=$(RL_REWARD_SERVER_DEVICE) uv run uvicorn rl.reward_server:app \
+		--host 0.0.0.0 --port $(RL_REWARD_SERVER_PORT) \
+		> rl-reward-server.log 2>&1 & echo $$! > $(RL_REWARD_SERVER_PID)
+	@echo "Reward server starting on port $(RL_REWARD_SERVER_PORT) (pid $$(cat $(RL_REWARD_SERVER_PID))); logs: rl-reward-server.log"
+
+.PHONY: rl-reward-server-down
+rl-reward-server-down: # Stops the reward server started by rl-reward-server-up.
+	@if [ -f $(RL_REWARD_SERVER_PID) ]; then kill $$(cat $(RL_REWARD_SERVER_PID)) && rm -f $(RL_REWARD_SERVER_PID); else echo "no $(RL_REWARD_SERVER_PID) found"; fi
+
 .PHONY: rl-train-bpcc
-rl-train-bpcc: # Launches GRPO training (rl-venv and rl-dataset must have been run first).
+rl-train-bpcc: # Launches GRPO training (rl-venv, rl-dataset, and rl-reward-server-up must have been run first).
 	PATH="$(MILES_VENV)/bin:$$PATH" MILES_REPO=$(MILES_REPO) bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
 # Containerized alternative to rl-venv/rl-train-bpcc, for hosts where pip
@@ -244,14 +262,15 @@ RL_DOCKER_IMAGE ?= miles-rl:latest
 RL_GPU_IDS           ?= 0,1
 RL_NUM_GPUS_PER_NODE ?= 2
 RL_COLOCATE          ?= 0
+RL_REWARD_SERVER_URL ?= http://127.0.0.1:$(RL_REWARD_SERVER_PORT)/similarity
 
 .PHONY: rl-docker-build
-rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE) + the "rl" dependency group.
+rl-docker-build: # Builds $(RL_DOCKER_IMAGE) from $(MILES_IMAGE). See docker/Dockerfile.miles-rl.
 	docker build -t $(RL_DOCKER_IMAGE) --build-arg MILES_IMAGE=$(MILES_IMAGE) \
 		-f docker/Dockerfile.miles-rl docker
 
 .PHONY: rl-docker-train-bpcc
-rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build and rl-dataset must have been run first). Defaults to this box's working 2x A100 split-placement config (RL_GPU_IDS, RL_NUM_GPUS_PER_NODE, RL_COLOCATE); also forwards the script's own env knobs (NUM_ROLLOUT, WANDB_API_KEY, SGLANG_ATTENTION_BACKEND, ATTN_IMPLEMENTATION, ...) - see rl/run_qwen3_0_6b_bpcc_fsdp.sh header.
+rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-build, rl-dataset, and rl-reward-server-up must have been run first). Defaults to this box's working 2x A100 split-placement config (RL_GPU_IDS, RL_NUM_GPUS_PER_NODE, RL_COLOCATE); also forwards the script's own env knobs (NUM_ROLLOUT, WANDB_API_KEY, SGLANG_ATTENTION_BACKEND, ATTN_IMPLEMENTATION, ...) - see rl/run_qwen3_0_6b_bpcc_fsdp.sh header.
 	docker run --rm \
 		--runtime nvidia --gpus all \
 		--ipc host --network host \
@@ -265,8 +284,9 @@ rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-
 		-e NUM_GPUS_PER_NODE="$(RL_NUM_GPUS_PER_NODE)" -e COLOCATE="$(RL_COLOCATE)" \
 		-e NUM_ROLLOUT -e MASTER_ADDR \
 		-e SGLANG_ATTENTION_BACKEND -e ATTN_IMPLEMENTATION \
-		-e SGLANG_MEM_FRACTION_STATIC -e RL_REWARD_EMBEDDING_DEVICE \
+		-e SGLANG_MEM_FRACTION_STATIC \
+		-e RL_REWARD_SERVER_URL="$(RL_REWARD_SERVER_URL)" \
 		$(RL_DOCKER_IMAGE) \
 		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-train-bpcc rl-docker-build rl-docker-train-bpcc
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc

@@ -1,7 +1,5 @@
-# Thin layer on radixark/miles's own published image, adding rl/reward.py's
-# extra deps (mirrors pyproject.toml's [dependency-groups].rl). Avoids the
-# glibc <2.39 issue with `make rl-venv` — see Makefile / rl-docker-build.
+# radixark/miles's own published image, used as-is - avoids the glibc <2.39
+# issue with `make rl-venv`. rl/reward.py only needs httpx (already in the
+# base image); reward scoring itself runs in rl/reward_server.py instead.
 ARG MILES_IMAGE=radixark/miles:latest
 FROM ${MILES_IMAGE}
-
-RUN pip install sentence-transformers>=5.7.0 einops>=0.8.2 loguru>=0.7.3
