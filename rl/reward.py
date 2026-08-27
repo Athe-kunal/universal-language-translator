@@ -14,10 +14,13 @@ import httpx
 from rl.reward_components import language_switch_penalty, repetition_penalty
 
 REWARD_SERVER_URL = os.environ.get("RL_REWARD_SERVER_URL", "http://127.0.0.1:8090/similarity")
-# rollout/eval batches can fan out to hundreds of concurrent custom_rm calls;
-# the server throttles actual GPU work via its own concurrency cap, so
-# requests queue there rather than failing - give them room to wait it out.
-_client = httpx.AsyncClient(timeout=120.0, limits=httpx.Limits(max_connections=1000))
+# rollout/eval batches can fan out to thousands of concurrent custom_rm calls
+# (a full eval pass), while the server serializes actual GPU work to ~1 at a
+# time - so requests queue server-side rather than failing. No client-side
+# connection cap: with one at a time, a cap just moves the wait from "queued
+# server-side" to "PoolTimeout waiting for a connection slot" at whatever the
+# cap is. The long timeout gives a queued request room to wait its turn.
+_client = httpx.AsyncClient(timeout=1200.0, limits=httpx.Limits(max_connections=None))
 _MAX_RETRIES = 3
 
 

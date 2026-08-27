@@ -21,9 +21,11 @@
 #   NUM_GPUS_PER_NODE   4
 #   NUM_ROLLOUT         200
 #   MASTER_ADDR         127.0.0.1
+#   EVAL_INTERVAL       500 (rollouts between eval passes)
 #   SAVE_DIR            /root/checkpoints - weight-only (--no-save-optim), so mount it to a
 #                       host path or the run's checkpoints vanish with the container.
-#   SAVE_INTERVAL       20 (rollouts between checkpoints)
+#   SAVE_INTERVAL       matches EVAL_INTERVAL by default, so checkpoints land on eval passes;
+#                       miles always force-saves on the final rollout regardless of interval.
 #   WANDB_PROJECT       universal-language-translator-rl
 #   WANDB_API_KEY       unset -> wandb logging disabled
 #   COLOCATE            1 -> rollout + actor share all NUM_GPUS_PER_NODE gpus.
@@ -41,8 +43,9 @@ EVAL_DATA="${EVAL_DATA:-bpcc_rl_eval.jsonl}"
 NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-4}"
 NUM_ROLLOUT="${NUM_ROLLOUT:-200}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-500}"
 SAVE_DIR="${SAVE_DIR:-/root/checkpoints}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-20}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-$EVAL_INTERVAL}"
 WANDB_PROJECT="${WANDB_PROJECT:-universal-language-translator-rl}"
 WANDB_GROUP="qwen3-0.6b-fsdp-bpcc-translation"
 COLOCATE="${COLOCATE:-1}"
@@ -81,7 +84,7 @@ TRAIN_ARGS=(
   --save "$SAVE_DIR" --save-interval "$SAVE_INTERVAL" --no-save-optim
   --num-rollout "$NUM_ROLLOUT" --rollout-batch-size 32 --n-samples-per-prompt 8
   --rollout-max-response-len 512 --rollout-temperature 1 --global-batch-size 256
-  --eval-interval 500 --eval-prompt-data bpcc "$EVAL_DATA"
+  --eval-interval "$EVAL_INTERVAL" --eval-prompt-data bpcc "$EVAL_DATA"
   --n-samples-per-eval-prompt 4 --eval-max-response-len 512 --eval-top-p 1
   --use-kl-loss --advantage-estimator grpo --kl-loss-coef 0.00 --kl-loss-type low_var_kl
   --kl-coef 0.00 --entropy-coef 0.00 --eps-clip 0.2 --eps-clip-high 0.28
