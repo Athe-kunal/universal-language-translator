@@ -172,6 +172,21 @@ qwen3-a2d-bd3lm-train-bpcc:
 		--num_processes $(GPUS) \
 		train_translation.py --config $(QWEN3_A2D_BD3LM_TRAIN_CONFIG)
 
+# Athekunal/english-hindi-reasoning-dataset (CoT reasoning steps,
+# English->Hindi) - pulled from the Hub into reasoning_hi_{train,val}.jsonl,
+# then SFT'd into dllm-hub/Qwen3-0.6B-diffusion-bd3lm-v0.1 with BD3LM. See
+# configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml.
+reasoning-hi-dataset:
+	uv run python data_gen/download_reasoning_hi.py
+
+QWEN3_A2D_BD3LM_REASONING_HI_CONFIG ?= configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml
+
+qwen3-a2d-bd3lm-train-reasoning-hi:
+	$(if $(GPU_IDS),CUDA_VISIBLE_DEVICES=$(GPU_IDS)) uv run accelerate launch \
+		--config_file $(ACCEL_CFG) \
+		--num_processes $(GPUS) \
+		train_translation.py --config $(QWEN3_A2D_BD3LM_REASONING_HI_CONFIG)
+
 ###
 # vllm serving (local Qwen/etc. models — see prediction/llm_clinical/docker/README.md)
 ###
@@ -295,4 +310,4 @@ rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-
 		$(RL_DOCKER_IMAGE) \
 		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc reasoning-hi-dataset qwen3-a2d-bd3lm-train-reasoning-hi rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc

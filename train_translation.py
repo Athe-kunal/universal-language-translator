@@ -83,6 +83,7 @@ class DataArguments(dllm.utils.DataArguments):
     src_field: str = "src"
     tgt_field: str = "tgt"
     eval_split: float = 0.05
+    eval_jsonl_path: str = None  # chunked-format only: load eval from this file's own examples instead of splitting jsonl_path
     max_length: int = 512
     max_token_length: int = 8192  # drop examples whose tokenized length exceeds this
     mask_prompt_loss: bool = True
@@ -180,16 +181,11 @@ def yaml_to_argv(cfg: dict) -> list[str]:
 # Dataset
 # ---------------------------------------------------------------------------
 
-def load_translation_dataset(
-    jsonl_path: str, tasks: list[dict], eval_split: float, seed: int
-) -> DatasetDict:
-    """
-    Reads translation_chunked.jsonl directly. Each task specifies a chunks_field
-    (e.g. "problem_chunks" or "solution_chunks") whose value is a list of
-    {"en": ..., "hi": ...} pairs — one training example per pair.
-    """
+def _records_from_chunked_jsonl(jsonl_path: str, tasks: list[dict]) -> list[dict]:
+    """Each task specifies a chunks_field (e.g. "problem_chunks", "solution_chunks",
+    "steps") whose value is a list of {"en": ..., "hi": ...} pairs — one
+    training example per pair."""
     records = []
-
     with open(jsonl_path) as f:
         for line in f:
             ex = json.loads(line)
@@ -204,8 +200,32 @@ def load_translation_dataset(
                             {"role": "assistant", "content": chunk["hi"]},
                         ],
                     })
+    return records
 
+
+def load_translation_dataset(
+    jsonl_path: str,
+    tasks: list[dict],
+    eval_split: float,
+    seed: int,
+    eval_jsonl_path: str = None,
+) -> DatasetDict:
+    """
+    Reads translation_chunked.jsonl directly. If eval_jsonl_path is set, it's
+    read as its own held-out set (e.g. a dataset's own `validation` split)
+    instead of carving eval_split out of jsonl_path via a random split.
+    """
+    records = _records_from_chunked_jsonl(jsonl_path, tasks)
     logger.info(f"Built {len(records)} examples from {jsonl_path}")
+
+    if eval_jsonl_path:
+        eval_records = _records_from_chunked_jsonl(eval_jsonl_path, tasks)
+        logger.info(f"Built {len(eval_records)} eval examples from {eval_jsonl_path}")
+        return DatasetDict({
+            "train": Dataset.from_list(records),
+            "test": Dataset.from_list(eval_records),
+        })
+
     dataset = Dataset.from_list(records)
     split = dataset.train_test_split(test_size=eval_split, seed=seed)
     return DatasetDict({"train": split["train"], "test": split["test"]})
@@ -315,7 +335,8 @@ def train():
             )
         else:
             dataset = load_translation_dataset(
-                data_args.jsonl_path, tasks, data_args.eval_split, training_args.seed
+                data_args.jsonl_path, tasks, data_args.eval_split, training_args.seed,
+                eval_jsonl_path=data_args.eval_jsonl_path,
             )
         map_fn = partial(
             dllm.utils.default_sft_map_fn,

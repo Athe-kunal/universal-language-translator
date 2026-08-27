@@ -1,0 +1,54 @@
+# SFT dllm-hub/Qwen3-0.6B-diffusion-bd3lm-v0.1 with the BD3LM (block
+# diffusion) objective on Athekunal/english-hindi-reasoning-dataset -
+# chain-of-thought reasoning steps translated English->Hindi (see
+# data_gen/upload_hf.py for how it was built, data_gen/download_reasoning_hi.py
+# for how it's pulled down here). Same trainer/base checkpoint as
+# qwen3_a2d_bd3lm_bpcc_translation_config.yaml, different (harder, longer,
+# reasoning-domain) data.
+#
+# Run:
+#   make reasoning-hi-dataset   # -> reasoning_hi_{train,val}.jsonl
+#   make qwen3-a2d-bd3lm-train-reasoning-hi
+model:
+  model_name_or_path: "dllm-hub/Qwen3-0.6B-diffusion-bd3lm-v0.1"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "reasoning_hi_train.jsonl"
+  eval_jsonl_path: "reasoning_hi_val.jsonl"
+  dataset_format: "chunked"
+  max_length: 512
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "reasoning"
+      chunks_field: "steps"
+
+training:
+  trainer: "bd3lm"
+  block_size: 32
+  output_dir: ".models/qwen3-a2d-bd3lm-reasoning-hi"
+  num_train_epochs: 2
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 2
+  per_device_eval_batch_size: 64
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  bf16: true
+  group_by_length: false
+  eval_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 5
+  logging_steps: 20
+  seed: 42
+  report_to: "all"
+  wandb_project: "universal-language-translator"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"
