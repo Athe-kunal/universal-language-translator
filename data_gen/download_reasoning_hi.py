@@ -7,7 +7,9 @@ in the same doc-per-line "chunked" shape train_translation.py already reads
 via `dataset_format: chunked` (translation_chunked.jsonl's problem_chunks/
 solution_chunks), just with a `steps` chunks_field instead - one line per
 document, `{"id": ..., "steps": [{"en": ..., "hi": ...}, ...]}`. Steps with
-a missing translation are dropped.
+a missing translation, or with fewer than `--min_token_count` English
+tokens (per the dataset's own `token_count` field - too short to carry
+useful translation signal, mostly stray fragments), are dropped.
 
 Usage:
     uv run python data_gen/download_reasoning_hi.py
@@ -36,10 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val_output", type=Path, default=DEFAULT_VAL_OUTPUT)
     parser.add_argument("--num_examples", type=int, default=None,
                          help="Cap the number of documents per split (default: all).")
+    parser.add_argument("--min_token_count", type=int, default=10,
+                         help="Drop steps with fewer than this many English tokens (default: %(default)s).")
     return parser.parse_args()
 
 
-def write_split(dataset, output_file: Path) -> int:
+def write_split(dataset, output_file: Path, min_token_count: int) -> int:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     n_docs = 0
     n_steps = 0
@@ -48,7 +52,9 @@ def write_split(dataset, output_file: Path) -> int:
             steps = [
                 {"en": step["en"], "hi": step["hi"]}
                 for step in doc["steps"]
-                if not step.get("has_missing_translation") and step.get("en") and step.get("hi")
+                if not step.get("has_missing_translation")
+                and step.get("en") and step.get("hi")
+                and step.get("token_count", 0) >= min_token_count
             ]
             if not steps:
                 continue
@@ -67,7 +73,7 @@ def main() -> None:
         split = split_name if args.num_examples is None else f"{split_name}[:{args.num_examples}]"
         logger.info(f"Loading {DATASET_NAME} split={split}")
         dataset = load_dataset(DATASET_NAME, split=split, token=hf_token)
-        n_docs, n_steps = write_split(dataset, output_file)
+        n_docs, n_steps = write_split(dataset, output_file, args.min_token_count)
         logger.info(f"Wrote {n_docs} documents ({n_steps} steps) to {output_file}")
 
 
