@@ -1,0 +1,48 @@
+# GRPO RL config for the reasoning_hi BD3LM checkpoint (rl/train_reasoning_hi_grpo.py).
+# block_size=32 matches how this checkpoint was SFT'd
+# (configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml).
+model:
+  model_name_or_path: "artifacts/qwen3-a2d-bd3lm-reasoning-hi-checkpoint-2652-final:v0"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora_r: 0
+
+training:
+  output_dir: ".models/qwen3-a2d-bd3lm-reasoning-hi/grpo"
+  block_size: 32
+  steps: 32
+  remasking: "low_confidence"
+  cfg_scale: 0.0
+  p_mask_prompt: 0.15
+  max_completion_length: 256
+  num_generations: 6
+  per_device_train_batch_size: 6
+  per_device_eval_batch_size: 6
+  gradient_accumulation_steps: 2
+  num_iterations: 4
+  learning_rate: 3.0e-6
+  # trl's GRPOConfig now defaults loss_type to "dapo", which needs a
+  # num_items_in_batch dllm-src's overridden _generate_and_score_completions
+  # never populates. "grpo" is the classic loss the diffu-GRPO method this
+  # trainer implements was built around, and doesn't need that field.
+  loss_type: "grpo"
+  # 0.0 disables the KL-to-reference term - TRL's GRPOTrainer only builds a
+  # reference model when beta != 0.0 (and no LoRA), and its ref-model loader
+  # can't resolve this checkpoint's custom auto_map architecture
+  # (A2DQwen3LMHeadModel isn't a class on `transformers` itself).
+  beta: 0.0
+  epsilon: 0.5
+  # No-ops without a reference model (beta=0.0 above disables it).
+  sync_ref_model: false
+  max_steps: 1000
+  # No local checkpointing - disk is limited. rl.wandb_checkpoint_callback's
+  # WandbWeightOnlyCheckpointCallback uploads a weights-only checkpoint to
+  # W&B on every eval instead (see eval_strategy/eval_steps below), deleting
+  # its local temp copy immediately after the upload.
+  save_strategy: "no"
+  eval_strategy: "steps"
+  eval_steps: 200
+  logging_steps: 10
+  seed: 42
+  bf16: true
+  report_to: "wandb"

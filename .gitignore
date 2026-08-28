@@ -231,3 +231,5 @@ wandb/
 .claude
 
 .rl-checkpoints
+
+artifacts

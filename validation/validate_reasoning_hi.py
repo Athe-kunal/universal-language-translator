@@ -1,18 +1,19 @@
 """
-Run a trained checkpoint on N examples from the BPCC hin_Deva held-out
-validation split (same split produced during training) and print the
+Run a trained checkpoint on N reasoning-step examples from
+Athekunal/english-hindi-reasoning-dataset's own held-out validation split
+(reasoning_hi_val.jsonl, see data_gen/download_reasoning_hi.py) and print the
 English source, Hindi reference, and model prediction side by side.
 
 Usage:
-    uv run python validate_bpcc.py
-    uv run python validate_bpcc.py --checkpoint .models/modernbert-chat-bpcc-translation/checkpoint-3609 --n 20
+    uv run python -m validation.validate_reasoning_hi --checkpoint .models/qwen3-a2d-bd3lm-reasoning-hi/checkpoint-500 --sampler bd3lm
 """
 
 import argparse
 import json
 from pathlib import Path
+import random
 
-from train_translation import load_flat_translation_dataset
+from train_translation import _records_from_chunked_jsonl
 from translate import (
     BD3LMSamplerConfig,
     MDLMSamplerConfig,
@@ -27,22 +28,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--checkpoint",
-        default=".models/modernbert-chat-bpcc-translation/checkpoint-3609",
+        default=".models/qwen3-a2d-bd3lm-reasoning-hi/checkpoint-final",
     )
-    parser.add_argument("--jsonl_path", default="bpcc_hin_deva.jsonl")
-    parser.add_argument("--eval_split", type=float, default=0.2)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--jsonl_path", default="reasoning_hi_val.jsonl")
     parser.add_argument("--n", type=int, default=20)
-    parser.add_argument("--out", default="bpcc_validation_sample.jsonl")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--out", default="reasoning_hi_validation_sample.jsonl")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--remasking", default="low_confidence")
     parser.add_argument(
         "--sampler",
-        default="mdlm",
+        default="bd3lm",
         choices=["mdlm", "bd3lm"],
         help="Must match how the checkpoint was trained (train_translation.py "
-        "--trainer) - a bd3lm checkpoint sampled with the mdlm sampler (or "
-        "vice versa) produces malformed output even though it loads fine.",
+        "--trainer).",
     )
     parser.add_argument(
         "--block_size",
@@ -53,15 +52,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print(f"Rebuilding held-out split from {args.jsonl_path} "
-          f"(eval_split={args.eval_split}, seed={args.seed}) ...")
-    dataset = load_flat_translation_dataset(
-        args.jsonl_path, "src", "tgt", args.eval_split, args.seed
+    print(f"Loading eval examples from {args.jsonl_path} ...")
+    records = _records_from_chunked_jsonl(
+        args.jsonl_path, [{"name": "reasoning", "chunks_field": "steps"}]
     )
-    eval_set = dataset["test"]
-    n = min(args.n, len(eval_set))
-    examples = eval_set.select(range(n))
-    print(f"Validation set has {len(eval_set)} examples — sampling first {n}")
+    random.Random(args.seed).shuffle(records)
+    n = min(args.n, len(records))
+    examples = records[:n]
+    print(f"Eval set has {len(records)} examples — sampling {n}")
 
     print(f"Loading model from {args.checkpoint} (sampler={args.sampler}) ...")
     model_args = ScriptArguments(model_name_or_path=args.checkpoint)
@@ -70,9 +68,6 @@ def main() -> None:
     sources = [ex["messages"][0]["content"] for ex in examples]
     references = [ex["messages"][1]["content"] for ex in examples]
 
-    # Size the canvas per-example: this checkpoint fills unused trailing
-    # positions with repetitive garbage rather than clean padding, so a
-    # canvas much longer than the real translation hurts output quality.
     print(f"Translating {len(sources)} examples (one at a time, adaptive length) ...")
     predictions = []
     for src in sources:
