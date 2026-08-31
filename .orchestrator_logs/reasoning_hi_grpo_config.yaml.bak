@@ -2,7 +2,7 @@
 # block_size=32 matches how this checkpoint was SFT'd
 # (configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml).
 model:
-  model_name_or_path: ".models/qwen3-a2d-bd3lm-reasoning-hi/checkpoint-2000"
+  model_name_or_path: "artifacts/qwen3-a2d-bd3lm-reasoning-hi-checkpoint-2652-final:v0"
   dtype: "bfloat16"
   attn_implementation: null
   lora_r: 0

@@ -19,7 +19,26 @@ data:
   jsonl_path: "reasoning_hi_train.jsonl"
   eval_jsonl_path: "reasoning_hi_val.jsonl"
   dataset_format: "chunked"
-  max_length: 512
+  # History: originally 512 with truncation="right" (the default) - max_length
+  # caps the WHOLE tokenized sequence (English prompt + Hindi completion
+  # combined, via the chat template), and anything over the cap gets its
+  # Hindi completion right-truncated - including the labels, so the model
+  # was being trained to predict truncated Hindi as if it were complete. At
+  # 512, only 25% of reasoning_hi steps fit uncut (median combined length is
+  # ~865). That was the root cause behind repetition-collapse and truncated
+  # output seen downstream in GRPO. Raising to 4096 (99.92% coverage) fixed
+  # correctness but made full-dataset training too slow to run (~15-17hrs).
+  # Compromise: 2048 (85% coverage) paired with max_token_length below, which
+  # DROPS instead of truncates anything over the cap - no example is ever
+  # trained on a truncated/corrupted label, at the cost of not training on
+  # the longest 15% of the dataset at all this round.
+  max_length: 2048
+  # Filters out (rather than truncates) any example whose full untokenized
+  # length exceeds this - applied in train_translation.py BEFORE the
+  # truncating step above runs, so anything that would need truncation is
+  # excluded instead. Set equal to max_length so nothing above the cap ever
+  # reaches the truncation path.
+  max_token_length: 2048
   mask_prompt_loss: true
   num_proc: 4
   tasks:
@@ -30,18 +49,37 @@ training:
   trainer: "bd3lm"
   block_size: 32
   output_dir: ".models/qwen3-a2d-bd3lm-reasoning-hi"
-  num_train_epochs: 2
-  per_device_train_batch_size: 16
-  gradient_accumulation_steps: 2
-  per_device_eval_batch_size: 64
+  # Cut from 2: halves total wall-clock. Still ~3.5x more gradient steps than
+  # checkpoint-939 (50k examples x 1 epoch) got, since this is the full 174k
+  # set - should converge better despite fewer epochs.
+  num_train_epochs: 1
+  # batch=4/accum=8 measured ~33GB/79GB used at ~10-13s/it. A 12-step smoke
+  # test at batch=8/accum=4 (same effective batch 64, on a 3k-example subset,
+  # .claude-config/jobs/aa255177/tmp/bstest_b8.log) hit 63GB/79GB but ran at
+  # the SAME ~10.5s/it average (train_runtime=126s/12 steps) - this workload
+  # is compute-bound, not overhead-bound, so the bigger batch buys no speed,
+  # only a safety margin against group_by_length occasionally bucketing a
+  # longer-than-average batch together. Kept for that margin, not for speed.
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  # Doubled from 4 alongside the same max_length halving above.
+  per_device_eval_batch_size: 8
   learning_rate: 3.0e-5
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.1
   weight_decay: 0.01
   bf16: true
-  group_by_length: false
+  # Flipped to true: with max_length=4096 and dynamic padding, a single long
+  # outlier sequence in an otherwise-short batch would force the whole batch
+  # to pad up to it - group_by_length buckets similar-length sequences
+  # together instead, cutting wasted padding/memory on typical batches.
+  group_by_length: true
   eval_strategy: "steps"
-  eval_steps: 500
+  # Raised from 500: each eval pass over the full 7609-example eval set takes
+  # ~18min (eval_runtime=1071s measured on checkpoint-939's run) - at 500 that
+  # was ~3.3hrs of eval overhead across a 2-epoch run. 1000 halves that.
+  eval_steps: 1000
   save_strategy: "steps"
   save_steps: 500
   save_total_limit: 5
