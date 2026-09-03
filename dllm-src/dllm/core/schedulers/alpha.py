@@ -80,6 +80,9 @@ class BaseAlphaScheduler:
             raise ValueError(f"(t={t}, s={s}) out of range")
         if not torch.all(s_t < t_t):
             raise ValueError(f"Require s < t elementwise, but got (t={t}, s={s})")
+        #  (1 - α(s)) / (1 - α(t)).
+        # A token is still masked at the noisier time t remains masked at the less noisy time s
+        # which masked tokens to reveal next
         out = (1 - self(s_t)) / (1 - self(t_t))
         return out.item() if isinstance(t, float) and isinstance(s, float) else out
 
