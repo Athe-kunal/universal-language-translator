@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--block_size", type=int, default=32)
     parser.add_argument("--max_new_tokens", type=int, default=256)
+    parser.add_argument("--temperature", type=float, default=0.0,
+                         help="0.0 = greedy. GRPO training rollouts use TRL's default of 1.0.")
     parser.add_argument("--out", default="rl_spot_check_results.jsonl")
     return parser.parse_args()
 
@@ -100,7 +102,7 @@ def main() -> None:
                         steps=max_new_tokens,
                         max_new_tokens=max_new_tokens,
                         block_size=args.block_size,
-                        temperature=0.0,
+                        temperature=args.temperature,
                         remasking="low_confidence",
                     )
                     prediction = translate_batch([en], tokenizer, sampler, config)[0]
