@@ -105,7 +105,11 @@ class Unit:
         char_start: Start offset of text_raw into the document.
         char_end: End offset of text_raw into the document.
         translate: Whether this unit should be sent to the translation model.
-        token_count: cl100k_base token count of text_raw.
+        token_count: cl100k_base token count of text_protected (not
+            text_raw) - this is what's actually sent to the translator, and
+            placeholders can cost more tokens than what they replace (e.g. a
+            single digit is 1 token, "⟦0⟧" is 5), so a raw-text count can
+            understate a number/code-dense unit's real request size.
         fingerprint: Structural fingerprint of this unit.
         merged_from: Node types this unit was merged from, if any.
         split_index: Position of this unit within its split group, if split.
@@ -526,7 +530,7 @@ def _build_unit(
         char_start=char_start,
         char_end=char_end,
         translate=translate,
-        token_count=_count_tokens(text_raw),
+        token_count=_count_tokens(text_protected),
         fingerprint=_compute_fingerprint(node, text_raw, spans),
     )
 
@@ -642,7 +646,7 @@ def _merge_group(group: list[Unit], text: str) -> Unit:
         char_start=char_start,
         char_end=char_end,
         translate=True,
-        token_count=_count_tokens(text_raw),
+        token_count=_count_tokens(text_protected),
         fingerprint=_compute_fingerprint(sub_tree, text_raw, spans),
         merged_from=[unit.kind for unit in group],
     )
@@ -876,31 +880,74 @@ def _fix_sentence_boundaries(
     return fixed
 
 
+def _protected_token_count(text: str, start: int, end: int, spans: list[ProtectedSpan]) -> int:
+    """Token count of text[start:end] as it will read once protected -
+    i.e. with any span fully inside [start, end) replaced by its
+    placeholder, matching what `_rebuild_unit` will independently
+    re-derive for this same slice.
+
+    A raw-text count is the wrong budget signal here: a placeholder like
+    "⟦0⟧" costs 5 cl100k_base tokens versus 1 for the digit it can
+    replace, so number/code-dense text can silently balloon well past
+    max_tokens once protected even though the raw slice looked small.
+
+    Args:
+        text: The full text `start`/`end`/`spans` offsets index into.
+        start: Slice start offset.
+        end: Slice end offset.
+        spans: Protected spans (document-order, non-overlapping) to
+            substitute wherever fully contained in [start, end).
+
+    Returns:
+        cl100k_base token count of the slice's protected form.
+    """
+    pieces = []
+    cursor = start
+    for span in spans:
+        if span.start < cursor or span.end > end:
+            continue
+        pieces.append(text[cursor:span.start])
+        pieces.append(span.placeholder)
+        cursor = span.end
+    pieces.append(text[cursor:end])
+    return _count_tokens("".join(pieces))
+
+
 def _group_by_token_budget(
-    text: str, offsets: list[tuple[int, int]], max_tokens: int
+    text: str,
+    offsets: list[tuple[int, int]],
+    max_tokens: int,
+    spans: list[ProtectedSpan] | None = None,
 ) -> list[tuple[int, int]]:
-    """Greedily groups contiguous (start, end) offsets so each group's token
-    count stays within `max_tokens` where possible.
+    """Greedily groups contiguous (start, end) offsets so each group's
+    protected-form token count stays within `max_tokens` where possible.
 
     Args:
         text: The text the offsets index into.
         offsets: Contiguous (start, end) offsets covering `text`.
         max_tokens: Token budget per group.
+        spans: This text's protected spans (see `_protected_token_count`);
+            empty to budget on raw token count instead (e.g. non-translatable
+            text, which is never protected).
 
     Returns:
-        Merged (start, end) groups, each ideally <= max_tokens tokens (a
-        single oversized piece that alone exceeds the budget is kept whole).
+        Merged (start, end) groups, each ideally <= max_tokens tokens once
+        protected (a single oversized piece that alone exceeds the budget is
+        kept whole).
     """
+    def piece_tokens(start: int, end: int) -> int:
+        return _protected_token_count(text, start, end, spans) if spans else _count_tokens(text[start:end])
+
     groups = [offsets[0]]
-    group_tokens = _count_tokens(text[offsets[0][0] : offsets[0][1]])
+    group_tokens = piece_tokens(*offsets[0])
     for start, end in offsets[1:]:
-        piece_tokens = _count_tokens(text[start:end])
-        if group_tokens > 0 and group_tokens + piece_tokens > max_tokens:
+        tokens = piece_tokens(start, end)
+        if group_tokens > 0 and group_tokens + tokens > max_tokens:
             groups.append((start, end))
-            group_tokens = piece_tokens
+            group_tokens = tokens
         else:
             groups[-1] = (groups[-1][0], end)
-            group_tokens += piece_tokens
+            group_tokens += tokens
     return groups
 
 
@@ -932,7 +979,7 @@ def _rebuild_unit(unit: Unit, start: int, end: int, split_index: int) -> Unit:
         char_start=unit.char_start + start,
         char_end=unit.char_start + end,
         translate=True,
-        token_count=_count_tokens(text_raw),
+        token_count=_count_tokens(text_protected),
         fingerprint=_compute_fingerprint(sub_tree, text_raw, spans),
         merged_from=unit.merged_from,
         split_index=split_index,
@@ -952,7 +999,7 @@ def _split_paragraph(unit: Unit, max_tokens: int) -> list[Unit]:
         sentence (nothing to split on).
     """
     offsets = _fix_sentence_boundaries(_sentence_offsets(unit.text_raw), unit.spans)
-    groups = _group_by_token_budget(unit.text_raw, offsets, max_tokens)
+    groups = _group_by_token_budget(unit.text_raw, offsets, max_tokens, unit.spans)
     if len(groups) <= 1:
         return [unit]
     return [
@@ -999,7 +1046,7 @@ def _split_list(unit: Unit, max_tokens: int) -> list[Unit]:
         return [unit]
 
     item_spans = [_node_span(item, line_starts) for item in items]
-    offsets = _group_by_token_budget(unit.text_raw, item_spans, max_tokens)
+    offsets = _group_by_token_budget(unit.text_raw, item_spans, max_tokens, unit.spans)
     if len(offsets) <= 1:
         return [unit]
     return [
@@ -1008,10 +1055,50 @@ def _split_list(unit: Unit, max_tokens: int) -> list[Unit]:
     ]
 
 
+_WORD_RUN_RE = re.compile(r"\S+\s*")
+
+
+def _hard_split(unit: Unit, max_tokens: int) -> list[Unit]:
+    """Last-resort, structure-agnostic split for a unit that's still
+    oversized after kind-specific splitting - a single sentence
+    `_split_paragraph` can't subdivide further, a single list_item
+    `_split_list` can't subdivide further, a merged lead-in + list (never
+    split, would orphan the lead-in), or a kind `split_units` never
+    attempts to split at all (heading, quote).
+
+    Cuts on whitespace boundaries only (never mid-word), grouped by the
+    same protected-token-aware budget as every other split path
+    (`_group_by_token_budget`) - guarantees every non-table translatable
+    unit that reaches translation/embedding actually respects `max_tokens`,
+    rather than leaving that guarantee as "best-effort" and pushing an
+    unbounded outlier onto downstream consumers (a translation request, an
+    embedding call's own context limit, ...) to defend against themselves.
+
+    Args:
+        unit: The still-oversized unit.
+        max_tokens: Token budget per resulting piece.
+
+    Returns:
+        Split sub-units, or [unit] unchanged if there's nothing to cut on
+        (e.g. a single unbroken run of non-whitespace characters).
+    """
+    offsets = [(m.start(), m.end()) for m in _WORD_RUN_RE.finditer(unit.text_raw)]
+    if not offsets:
+        return [unit]
+    groups = _group_by_token_budget(unit.text_raw, offsets, max_tokens, unit.spans)
+    if len(groups) <= 1:
+        return [unit]
+    return [_rebuild_unit(unit, start, end, split_index) for split_index, (start, end) in enumerate(groups)]
+
+
 def split_units(units: list[Unit], max_tokens: int) -> list[Unit]:
     """Splits oversized units per the chunking spec's Step 4 (fallback only):
     lists split at item boundaries, tables are never split (emitted oversized
     with a warning), paragraphs split at sentence boundaries via wtpsplit.
+    Anything still oversized afterward (an unsplittable single sentence or
+    list_item, a merged lead-in+list, or a kind never split above - heading,
+    quote) goes through `_hard_split` as a final structure-agnostic pass, so
+    every non-table translatable unit is guaranteed to respect `max_tokens`.
     Logs the split rate; warns above a 15% rate (max_tokens likely too low).
 
     Args:
@@ -1043,6 +1130,16 @@ def split_units(units: list[Unit], max_tokens: int) -> list[Unit]:
             parts = _split_paragraph(unit, max_tokens)
         else:
             parts = [unit]
+
+        if unit.kind != "table":
+            hard_split_parts = []
+            for part in parts:
+                if part.token_count > max_tokens:
+                    hard_split_parts.extend(_hard_split(part, max_tokens))
+                else:
+                    hard_split_parts.append(part)
+            parts = hard_split_parts
+
         if len(parts) > 1:
             split_count += 1
         result.extend(parts)

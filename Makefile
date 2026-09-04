@@ -11,7 +11,7 @@ BPCC_CONFIG      ?= bpcc-seed-latest
 BPCC_OUTPUT_FILE ?= bpcc_hin_deva.jsonl
 
 dataset:
-	uv run python data_gen/download_bpcc.py \
+	uv run python -m data_gen.download_datasets --dataset bpcc \
 		--config "$(BPCC_CONFIG)" \
 		--output_file "$(BPCC_OUTPUT_FILE)"
 
@@ -30,29 +30,21 @@ sample-reasoning:
 		--seed "$(SAMPLE_REASONING_SEED)" \
 		--output_file "$(SAMPLE_REASONING_OUTPUT_FILE)"
 
-# Chunks + translates OpenThoughts3/natural_reasoning documents to Hindi via
-# data_gen/translate_reasoning.py, against a vllm server started with vllm-up
-# (or vllm-up-4b). Writes both the reconstructed per-document JSONL and a
-# per-chunk JSONL updated incrementally — view either live in `streamlit run
-# app.py`'s "Reasoning Translations" tab.
-# Deliberately separate from NUM_OPENTHOUGHTS3/NUM_NATURAL_REASONING above
-# (those default to 50000 for sample-reasoning) — translation is far more
-# expensive per document than sampling, so this target defaults small.
-TRANSLATE_NUM_OPENTHOUGHTS3   ?= 100
-TRANSLATE_NUM_NATURAL_REASONING ?= 100
-TRANSLATE_REASONING_BASE_URL ?= http://localhost:8077/v1
-TRANSLATE_REASONING_MODEL    ?= Qwen/Qwen3-4B-Instruct-2507
-TRANSLATE_REASONING_OUTPUT_FILE       ?= translated_reasoning.jsonl
-TRANSLATE_REASONING_UNITS_OUTPUT_FILE ?= translated_reasoning_units.jsonl
+# Chunks OpenThoughts3/natural_reasoning/OpenCodeReasoning documents and
+# translates them via Fireworks — batch request files or direct online
+# calls, per data_gen/config.py's USE_BATCH_API toggle (that file is the
+# single source of control for model/account/limits).
+translate-fireworks:
+	uv run python -m data_gen.translate_fireworks \
+		--num_openthoughts3 "$(FIREWORKS_NUM_OPENTHOUGHTS3)" \
+		--num_natural_reasoning "$(FIREWORKS_NUM_NATURAL_REASONING)" \
+		--num_opencodereasoning "$(FIREWORKS_NUM_OPENCODEREASONING)" \
+		--output_dir "$(FIREWORKS_BATCH_OUTPUT_DIR)"
 
-translate-reasoning:
-	uv run python data_gen/translate_reasoning.py \
-		--num_openthoughts3 "$(TRANSLATE_NUM_OPENTHOUGHTS3)" \
-		--num_natural_reasoning "$(TRANSLATE_NUM_NATURAL_REASONING)" \
-		--base_url "$(TRANSLATE_REASONING_BASE_URL)" \
-		--model "$(TRANSLATE_REASONING_MODEL)" \
-		--output_file "$(TRANSLATE_REASONING_OUTPUT_FILE)" \
-		--units_output_file "$(TRANSLATE_REASONING_UNITS_OUTPUT_FILE)"
+FIREWORKS_NUM_OPENTHOUGHTS3    ?= 100
+FIREWORKS_NUM_NATURAL_REASONING ?= 100
+FIREWORKS_NUM_OPENCODEREASONING ?= 0
+FIREWORKS_BATCH_OUTPUT_DIR      ?= fireworks_batch
 
 export CUDA_HOME ?= /home/ubuntu/.local/fake-cuda
 
@@ -177,7 +169,7 @@ qwen3-a2d-bd3lm-train-bpcc:
 # then SFT'd into dllm-hub/Qwen3-0.6B-diffusion-bd3lm-v0.1 with BD3LM. See
 # configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml.
 reasoning-hi-dataset:
-	uv run python data_gen/download_reasoning_hi.py
+	uv run python -m data_gen.download_datasets --dataset reasoning_hi
 
 QWEN3_A2D_BD3LM_REASONING_HI_CONFIG ?= configs/qwen3_a2d_bd3lm_reasoning_hi_config.yaml
 

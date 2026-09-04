@@ -13,8 +13,9 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", SyntaxWarning)
     import pysbd
 from datasets import load_dataset
-from openai import AsyncOpenAI
 from tqdm import tqdm
+
+from data_gen.openai_client import AsyncChatClient
 
 CACHE_FILE = Path("translation_chunked.jsonl")
 LOG_FILE = Path("translation.log")
@@ -70,28 +71,19 @@ def split_paragraphs(text: str) -> list[str]:
     return [_restore_latex(s.strip(), tokens) for s in sentences if s.strip()]
 
 
-async def translate_chunk(
-    client: AsyncOpenAI,
-    sem: asyncio.Semaphore,
-    chunk: str,
-    log: logging.Logger,
-) -> str:
-    async with sem:
-        resp = await client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": TRANSLATE_PROMPT},
-                {"role": "user", "content": chunk},
-            ],
-            temperature=0.0,
-        )
-    return (resp.choices[0].message.content or "").strip()
+async def translate_chunk(client: AsyncChatClient, chunk: str) -> str:
+    return await client.complete(
+        messages=[
+            {"role": "system", "content": TRANSLATE_PROMPT},
+            {"role": "user", "content": chunk},
+        ],
+        temperature=0.0,
+    )
 
 
-async def translate(client: AsyncOpenAI, sem: asyncio.Semaphore, text: str, log: logging.Logger) -> list[dict]:
+async def translate(client: AsyncChatClient, text: str) -> list[dict]:
     parts = split_paragraphs(text)
-    tasks = [translate_chunk(client, sem, chunk, log) for chunk in parts]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*(translate_chunk(client, chunk) for chunk in parts))
     return [{"en": en, "hi": hi} for en, hi in zip(parts, results)]
 
 
@@ -110,8 +102,7 @@ def load_done() -> set[str]:
 
 async def worker(
     queue: asyncio.Queue,
-    client: AsyncOpenAI,
-    sem: asyncio.Semaphore,
+    client: AsyncChatClient,
     cache_fh,
     write_lock: asyncio.Lock,
     pbar: tqdm,
@@ -130,8 +121,8 @@ async def worker(
                 next(g for g, ok in zip(ex["generations"], ex["correctness_math_verify"]) if ok)
             )
             problem_hi, solution_hi = await asyncio.gather(
-                translate(client, sem, problem, log),
-                translate(client, sem, solution, log),
+                translate(client, problem),
+                translate(client, solution),
             )
             entry = {
                 "id": pid,
@@ -181,19 +172,20 @@ async def main(num_examples: int | None = None) -> None:
     log.info(f"Queuing {len(examples)} examples ({len(done)} skipped)")
 
     concurrency = min(CONCURRENCY, len(examples))
-    client = AsyncOpenAI(
+    client = AsyncChatClient(
         base_url=os.environ.get("OPENAI_BASE_URL", "http://localhost:8069/v1"),
         api_key=os.environ.get("OPENAI_API_KEY", "none"),
+        model=MODEL,
+        concurrency=64,
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=concurrency * 2)
     write_lock = asyncio.Lock()
-    sem = asyncio.Semaphore(64)
 
     pbar = tqdm(total=len(examples), desc="Translating", file=sys.stderr)
 
     with open(cache_file, "a", encoding="utf-8") as cache_fh:
         workers = [
-            asyncio.create_task(worker(queue, client, sem, cache_fh, write_lock, pbar, log))
+            asyncio.create_task(worker(queue, client, cache_fh, write_lock, pbar, log))
             for _ in range(concurrency)
         ]
 

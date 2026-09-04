@@ -2,7 +2,7 @@
 
 Continues RL post-training of a checkpoint already SFT'd by
 train_translation.py on reasoning_hi_train.jsonl (see
-data_gen/download_reasoning_hi.py), using rl.bd3lm_grpo_trainer's
+data_gen/download_datasets.py --dataset reasoning_hi), using rl.bd3lm_grpo_trainer's
 BD3LMDiffuGRPOTrainer - a GRPO trainer whose log-prob computation matches
 this checkpoint's block-diffusion (BD3LM) training objective, unlike dllm's
 stock DiffuGRPOTrainer (which assumes MDLM).

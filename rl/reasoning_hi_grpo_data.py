@@ -1,8 +1,8 @@
 """Dataset loader for GRPO RL training on the reasoning_hi a2d/mdlm checkpoint.
 
 Loads Athekunal/english-hindi-reasoning-dataset directly from the Hugging
-Face Hub (see data_gen/download_reasoning_hi.py, which applies the same
-filtering to build the local SFT JSONL) and flattens each document's `steps`
+Face Hub (see `data_gen/download_datasets.py --dataset reasoning_hi`, which
+applies the same filtering to build the local SFT JSONL) and flattens each document's `steps`
 list into individual {"prompt", "hi"} rows for dllm's DiffuGRPOTrainer.
 
 Prompt format matches train_translation.py's SFT chat template exactly - a
@@ -28,7 +28,7 @@ def _flatten_steps(batch: dict, min_token_count: int) -> dict:
             steps-list per document.
         min_token_count: Drop steps with fewer than this many English tokens
             (per the dataset's own `token_count` field), matching
-            data_gen/download_reasoning_hi.py's default filtering.
+            `data_gen/download_datasets.py --dataset reasoning_hi`'s default filtering.
 
     Returns:
         `{"prompt": [...], "hi": [...]}`, one entry per kept step.
@@ -55,7 +55,7 @@ def get_reasoning_hi_dataset(split: str = "train", min_token_count: int = 10) ->
         split: "train" or "validation".
         min_token_count: Drop steps with fewer than this many English tokens
             (per the dataset's own `token_count` field), matching
-            data_gen/download_reasoning_hi.py's default filtering.
+            `data_gen/download_datasets.py --dataset reasoning_hi`'s default filtering.
 
     Returns:
         A Dataset with one row per step:

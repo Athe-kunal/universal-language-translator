@@ -1,7 +1,7 @@
 """End-to-end EN -> HI reasoning-translation demo.
 
 Picks a random document from reasoning_hi_train.jsonl (already chunked into
-{"en", "hi"} steps by data_gen/download_reasoning_hi.py), and
+{"en", "hi"} steps by data_gen/download_datasets.py --dataset reasoning_hi), and
 diffusion-decodes its steps through the BD3LM sampler (each step starts
 fully masked), batching as many steps together per call as fit under
 TOKEN_BUDGET (some docs have 100+ steps, so one batch per doc can OOM

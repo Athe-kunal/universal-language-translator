@@ -1,7 +1,7 @@
 """
 Run a trained checkpoint on N reasoning-step examples from
 Athekunal/english-hindi-reasoning-dataset's own held-out validation split
-(reasoning_hi_val.jsonl, see data_gen/download_reasoning_hi.py) and print the
+(reasoning_hi_val.jsonl, see data_gen/download_datasets.py --dataset reasoning_hi) and print the
 English source, Hindi reference, and model prediction side by side.
 
 Usage:

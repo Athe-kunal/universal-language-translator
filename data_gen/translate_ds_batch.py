@@ -18,13 +18,12 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import litellm
 from datasets import load_dataset
-from tqdm import tqdm
 
+from data_gen.openai_client import download_batch, poll_batch, submit_batch
 from translate_ds import TRANSLATE_PROMPT, load_done, problem_id, split_paragraphs, strip_think
 
 CACHE_FILE = Path("translation_chunked.jsonl")
@@ -132,93 +131,8 @@ def build_example_meta(examples: list[tuple[int, dict]]) -> dict[str, dict]:
     return meta
 
 
-# ---------------------------------------------------------------------------
-# Batch API calls (litellm async)
-# ---------------------------------------------------------------------------
-
-async def submit_batch(requests: list[dict], log: logging.Logger) -> str:
-    """Upload requests JSONL, create batch job, return batch_id."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as tmp:
-        for req in requests:
-            tmp.write(json.dumps(req) + "\n")
-        tmp_path = tmp.name
-
-    try:
-        log.info(f"Uploading {len(requests)} requests ({Path(tmp_path).stat().st_size / 1024:.1f} KB)…")
-        with open(tmp_path, "rb") as fh:
-            file_obj = await litellm.acreate_file(
-                file=fh,
-                purpose="batch",
-                custom_llm_provider="openai",
-            )
-        log.info(f"File uploaded: {file_obj.id}")
-
-        batch = await litellm.acreate_batch(
-            completion_window="24h",
-            endpoint="/v1/chat/completions",
-            input_file_id=file_obj.id,
-            custom_llm_provider="openai",
-        )
-        log.info(f"Batch created: {batch.id}")
-        return batch.id
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-
-async def poll_batch(batch_id: str, log: logging.Logger, interval: int = 60) -> str:
-    """Poll until batch completes. Returns output_file_id."""
-    terminal = {"completed", "failed", "expired", "cancelled"}
-    pbar = None
-
-    while True:
-        status = await litellm.aretrieve_batch(batch_id=batch_id, custom_llm_provider="openai")
-        counts = status.request_counts
-
-        if pbar is None and counts and counts.total:
-            pbar = tqdm(total=counts.total, desc=f"Batch {batch_id[:16]}…", file=sys.stderr)
-
-        if pbar and counts:
-            pbar.n = counts.completed
-            pbar.refresh()
-
-        log.info(
-            f"batch={batch_id} status={status.status} "
-            f"completed={getattr(counts, 'completed', '?')} "
-            f"failed={getattr(counts, 'failed', '?')} "
-            f"total={getattr(counts, 'total', '?')}"
-        )
-
-        if status.status in terminal:
-            if pbar:
-                pbar.close()
-            if status.status != "completed":
-                raise RuntimeError(f"Batch {batch_id} ended with status={status.status}")
-            return status.output_file_id
-
-        await asyncio.sleep(interval)
-
-
-async def download_and_parse(output_file_id: str, log: logging.Logger) -> dict[str, str]:
-    """Download batch output, return {custom_id: translated_text}."""
-    log.info(f"Downloading output file {output_file_id}…")
-    content = await litellm.afile_content(file_id=output_file_id, custom_llm_provider="openai")
-    raw = content.content if hasattr(content, "content") else content
-
-    results: dict[str, str] = {}
-    for line in raw.decode().splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        cid = row.get("custom_id", "")
-        if row.get("error"):
-            log.warning(f"custom_id={cid} error: {row['error']}")
-            continue
-        text = row["response"]["body"]["choices"][0]["message"]["content"] or ""
-        results[cid] = text.strip()
-
-    log.info(f"Parsed {len(results)} results from output file")
-    return results
-
+# submit_batch / poll_batch / download_batch are shared with
+# translate_fireworks.py's OpenAI-Batch-API path via data_gen.openai_client.
 
 # ---------------------------------------------------------------------------
 # Assemble final entries
@@ -283,7 +197,7 @@ async def main(num_examples: int | None, batch_size: int, dry_run: bool, poll_in
             log.info(f"Resuming in-progress batch {job['batch_id']}…")
             try:
                 output_file_id = await poll_batch(job["batch_id"], log, poll_interval)
-                translations = await download_and_parse(output_file_id, log)
+                translations = await download_batch(output_file_id, log)
 
                 # Reload examples for this job's problem IDs (already-done check skips them after)
                 done = load_done()
@@ -343,7 +257,7 @@ async def main(num_examples: int | None, batch_size: int, dry_run: bool, poll_in
         append_job({"batch_id": batch_id, "status": "submitted", "output_file_id": None, "problem_ids": pids})
 
         output_file_id = await poll_batch(batch_id, log, poll_interval)
-        translations = await download_and_parse(output_file_id, log)
+        translations = await download_batch(output_file_id, log)
 
         entries = assemble_entries(sl, translations, log)
         with open(CACHE_FILE, "a", encoding="utf-8") as f:
