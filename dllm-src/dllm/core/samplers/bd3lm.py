@@ -10,7 +10,11 @@ import torch
 import torch.nn.functional as F
 
 from dllm.core.samplers.base import BaseSampler, BaseSamplerConfig, BaseSamplerOutput
-from dllm.core.samplers.utils import add_gumbel_noise, get_num_transfer_tokens
+from dllm.core.samplers.utils import (
+    add_gumbel_noise,
+    apply_repetition_penalty,
+    get_num_transfer_tokens,
+)
 
 
 def _prepare_for_sampling(
@@ -149,6 +153,10 @@ class BD3LMSamplerConfig(BaseSamplerConfig):
     cfg_scale: float = 0.0
     cfg_keep_tokens: list[int] | None = None
     right_shift_logits: bool = False
+    # >1.0 discourages re-picking any token already committed elsewhere in the
+    # sequence (prompt or generated so far) - see
+    # dllm.core.samplers.utils.apply_repetition_penalty. 1.0 is a no-op.
+    repetition_penalty: float = 1.0
 
 
 @dataclass
@@ -194,6 +202,7 @@ class BD3LMSampler(BaseSampler):
         )
         return_dict = kwargs.get("return_dict", config.return_dict)
         right_shift_logits = kwargs.get("right_shift_logits", config.right_shift_logits)
+        repetition_penalty = kwargs.get("repetition_penalty", config.repetition_penalty)
 
         assert block_size >= 1
         assert steps >= 1
@@ -411,6 +420,14 @@ class BD3LMSampler(BaseSampler):
                     shifted[:, 0:1, :] = prefix_last_logits
                     shifted[:, 1:, :] = logits_block[:, :-1, :]
                     logits_block = shifted
+
+                if repetition_penalty != 1.0:
+                    logits_block = apply_repetition_penalty(
+                        logits_block,
+                        x,
+                        penalty=repetition_penalty,
+                        exclude_ids={pad_id, mask_id},
+                    )
 
                 # ---- One diffusion step over this block ----
                 x_block_updated = _diffusion_step_block(

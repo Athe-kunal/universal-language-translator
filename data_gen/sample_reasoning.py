@@ -210,19 +210,26 @@ def sample_opencodereasoning_shards(
     indices = rng.sample(range(len(ds)), min(num_samples, len(ds)))
 
     rows = []
+    seen: set[str] = set()
     skipped_no_output = 0
     skipped_done = 0
+    skipped_dupe = 0
     for i in indices:
         mapped = map_opencodereasoning_row(ds[i])
         if mapped is None:
             skipped_no_output += 1
         elif mapped.id in done:
             skipped_done += 1
+        elif mapped.id in seen:
+            # See sample_openthoughts3_shards - id is a content hash, and
+            # the source dataset itself contains literal duplicate rows.
+            skipped_dupe += 1
         else:
+            seen.add(mapped.id)
             rows.append(mapped)
     logger.info(
-        f"opencodereasoning: {len(rows)} rows ready "
-        f"({skipped_no_output} missing reasoning trace, {skipped_done} already done)"
+        f"opencodereasoning: {len(rows)} rows ready ({skipped_no_output} missing reasoning trace, "
+        f"{skipped_done} already done, {skipped_dupe} duplicate within this sample)"
     )
     return rows
 
@@ -268,19 +275,29 @@ def sample_openthoughts3_shards(num_samples: int, seed: int, done: set[str]) -> 
     indices = rng.sample(range(len(ds)), min(num_samples, len(ds)))
 
     rows = []
+    seen: set[str] = set()
     skipped_no_turns = 0
     skipped_done = 0
+    skipped_dupe = 0
     for i in indices:
         mapped = map_openthoughts3_row(ds[i])
         if mapped is None:
             skipped_no_turns += 1
         elif mapped.id in done:
             skipped_done += 1
+        elif mapped.id in seen:
+            # id is a content hash of the question (row_id) - the source
+            # dataset itself contains literal duplicate rows (observed: the
+            # same question up to 27x within a single 3-shard sample), and
+            # `done` alone (ids already written by a *prior* run) can't
+            # catch a duplicate that first appears within *this* sample.
+            skipped_dupe += 1
         else:
+            seen.add(mapped.id)
             rows.append(mapped)
     logger.info(
-        f"openthoughts3: {len(rows)} rows ready "
-        f"({skipped_no_turns} missing human/gpt turn, {skipped_done} already done)"
+        f"openthoughts3: {len(rows)} rows ready ({skipped_no_turns} missing human/gpt turn, "
+        f"{skipped_done} already done, {skipped_dupe} duplicate within this sample)"
     )
     return rows
 
@@ -308,19 +325,26 @@ def sample_natural_reasoning(num_samples: int, seed: int, done: set[str]) -> lis
     indices = rng.sample(range(len(ds)), min(num_samples, len(ds)))
 
     rows = []
+    seen: set[str] = set()
     skipped_no_responses = 0
     skipped_done = 0
+    skipped_dupe = 0
     for i in indices:
         mapped = map_natural_reasoning_row(ds[i])
         if mapped is None:
             skipped_no_responses += 1
         elif mapped.id in done:
             skipped_done += 1
+        elif mapped.id in seen:
+            # See sample_openthoughts3_shards - id is a content hash, and
+            # the source dataset itself contains literal duplicate rows.
+            skipped_dupe += 1
         else:
+            seen.add(mapped.id)
             rows.append(mapped)
     logger.info(
-        f"natural_reasoning: {len(rows)} rows ready "
-        f"({skipped_no_responses} with no responses, {skipped_done} already done)"
+        f"natural_reasoning: {len(rows)} rows ready ({skipped_no_responses} with no responses, "
+        f"{skipped_done} already done, {skipped_dupe} duplicate within this sample)"
     )
     return rows
 

@@ -69,6 +69,46 @@ def get_num_transfer_tokens(
     return torch.stack(padded_rows, dim=0)
 
 
+def apply_repetition_penalty(
+    logits: torch.Tensor,
+    x: torch.Tensor,
+    penalty: float,
+    exclude_ids: set[int],
+) -> torch.Tensor:
+    """
+    Standard repetition penalty (Keskar et al. 2019 / HF's
+    RepetitionPenaltyLogitsProcessor), adapted for a diffusion sampler where
+    "already generated" means "already committed anywhere in the current
+    sequence x" rather than "earlier in a strictly left-to-right history":
+    for every token id seen in x (excluding pad/mask), divide its logit by
+    `penalty` if positive or multiply by `penalty` if negative - discourages
+    (without forbidding) picking that token again, penalizing the
+    short-phrase repetition loops diffusion decoding can fall into on some
+    inputs (e.g. reasoning steps containing "Wait").
+
+    Args:
+        logits: [B, L, V] logits for the block currently being denoised.
+        x: [B, T] full sequence so far (prompt + already-committed tokens).
+        penalty: >1.0 discourages repeats; 1.0 is a no-op.
+        exclude_ids: Token ids (pad, mask, ...) never penalized.
+
+    Returns:
+        Penalized logits, same shape as `logits`.
+    """
+    if penalty == 1.0:
+        return logits
+    logits = logits.clone()
+    exclude = torch.as_tensor(list(exclude_ids), device=x.device)
+    for b in range(x.size(0)):
+        seen = torch.unique(x[b])
+        seen = seen[~torch.isin(seen, exclude)]
+        if seen.numel() == 0:
+            continue
+        vals = logits[b, :, seen]
+        logits[b, :, seen] = torch.where(vals > 0, vals / penalty, vals * penalty)
+    return logits
+
+
 def add_gumbel_noise(logits: torch.Tensor, temperature: float) -> torch.Tensor:
     """
     The Gumbel max is a method for sampling categorical distributions.

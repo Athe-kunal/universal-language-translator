@@ -27,7 +27,7 @@ USE_BATCH_API = True
 FIREWORKS_MODEL = "accounts/fireworks/models/llama-v3p1-8b-instruct"
 
 # Your Fireworks account id (the {ACCOUNT_ID} segment in every batch-API path).
-FIREWORKS_ACCOUNT_ID = "fireworks"
+FIREWORKS_ACCOUNT_ID = "athekunal-93nzevyfv8"
 
 # Batch Inference API host (account-scoped REST resources: datasets, jobs).
 # Override only for a non-default region/deployment.
@@ -46,9 +46,23 @@ MIN_TOKENS = 60
 MAX_TOKENS = 400
 
 # Token budget for a regrouped "step" (several units merged for context) -
-# see segment_steps.py.
+# see segment_steps.py. MIN_STEP_TOKENS only gates the semantic-break
+# fallback signal, NOT a hard floor - a heading/discourse-marker boundary
+# fires regardless of size. MIN_MERGE_TOKENS is the real floor: any step
+# under this gets folded into a neighbor as a post-processing pass.
 MIN_STEP_TOKENS = 80
-MAX_STEP_TOKENS = 600
+MAX_STEP_TOKENS = 1024
+MIN_MERGE_TOKENS = 50
+
+# Residual floor after merging: a step can still end up under
+# MIN_MERGE_TOKENS if it's the only translatable unit in its run
+# (sandwiched between two non-translatable units - never merged across
+# those, by design), so nothing to merge into. Below IGNORE_MIN_TOKENS such
+# a step is dropped rather than sent as its own translation request -
+# deliberately much lower than MIN_MERGE_TOKENS, so only near-meaningless
+# fragments (e.g. "*.*\n") are discarded; anything with real content still
+# gets translated even if under the merge floor.
+IGNORE_MIN_TOKENS = 10
 
 SEMANTIC_PERCENTILE = 20.0
 MIN_UNITS_FOR_SEMANTIC = 4

@@ -1,0 +1,61 @@
+# 10k-step smoke test on the NEW fireworks-translated data
+# (reasoning_hi_final_100k.jsonl, curated by similarity score - see
+# data_gen/curate_top_k.py) rather than the older Hub dataset
+# (reasoning_hi_train.jsonl) that qwen3_a2d_bd3lm_reasoning_hi_config.yaml
+# uses. Purpose: cheaply check the new translation pipeline's output is
+# learnable/good quality before committing to a full run on all 100k (or the
+# full 484k in reasoning_hi_from_fireworks.jsonl).
+#
+# Data prep (see data_gen/curate_top_k.py's output):
+#   reasoning_hi_final_10k_train.jsonl - first 827 docs / 10001 steps
+#   reasoning_hi_final_10k_val.jsonl   - next 42 docs / 504 steps
+#
+# Run:
+#   make train CONFIG=configs/qwen3_a2d_bd3lm_reasoning_hi_final10k_config.yaml GPUS=1 GPU_IDS=1
+extends: _base_chunked_translation.yaml
+
+model:
+  model_name_or_path: "dllm-hub/Qwen3-0.6B-diffusion-bd3lm-v0.1"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "reasoning_hi_final_10k_train.jsonl"
+  eval_jsonl_path: "reasoning_hi_final_10k_val.jsonl"
+  dataset_format: "chunked"
+  max_length: 2048
+  max_token_length: 2048
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "reasoning"
+      chunks_field: "steps"
+
+training:
+  trainer: "bd3lm"
+  block_size: 32
+  output_dir: ".models/qwen3-a2d-bd3lm-reasoning-hi-final10k"
+  # Small dataset (10k steps vs. the full run's 174k) - more epochs to get a
+  # meaningful read on quality without needing more data.
+  num_train_epochs: 3
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  per_device_eval_batch_size: 8
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  bf16: true
+  group_by_length: true
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  save_total_limit: 3
+  logging_steps: 10
+  seed: 42
+  report_to: "all"
+  wandb_project: "universal-language-translator"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"

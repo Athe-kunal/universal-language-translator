@@ -19,6 +19,15 @@ Boundary detection, in priority order:
      already has >= --min_step_tokens, so it fine-tunes long stretches
      rather than fragmenting short ones).
   4. Hard cap: --max_step_tokens is a final safety net regardless of signal.
+
+A structural/discourse-marker boundary (1-2 above) fires regardless of how
+small the step it closes ends up - by design, so a "Wait, ..." pivot always
+gets its own step. That can still produce steps of just a few tokens
+(--min_step_tokens only suppresses the semantic *fallback* below that size,
+it isn't a floor on every step). --min_merge_tokens is the real floor: a
+post-processing pass folds any step under that size into a neighbor
+(forward into the next step when there is one, since a tiny pivot's natural
+continuation is what follows it; backward only for a run's last step).
 """
 
 import re
@@ -30,6 +39,7 @@ from data_gen.chunking import ChunkedDocument, Unit, _assert_invariants, _comput
 
 DEFAULT_MIN_STEP_TOKENS = 80
 DEFAULT_MAX_STEP_TOKENS = 600
+DEFAULT_MIN_MERGE_TOKENS = 50
 DEFAULT_SEMANTIC_PERCENTILE = 20.0
 DEFAULT_EMBEDDING_MODEL = embeddings.DEFAULT_EMBEDDING_MODEL
 DEFAULT_EMBEDDING_BACKEND = embeddings.DEFAULT_EMBEDDING_BACKEND
@@ -121,11 +131,51 @@ def _split_translatable_runs(units: list[Unit]) -> list[tuple[str, list[Unit]]]:
     return segments
 
 
+def _merge_undersized_groups(groups: list[list[Unit]], min_merge_tokens: int) -> list[list[Unit]]:
+    """Folds any group whose total token_count is under `min_merge_tokens`
+    into a neighbor, so a structural/discourse-marker boundary (which fires
+    regardless of the resulting step's size - see module docstring) can't
+    leave a step of just a few tokens standing alone.
+
+    Merges forward (into the following group) when one exists, since a tiny
+    discourse-marker pivot's ("Wait, ...") natural continuation is what
+    follows it; merges backward only for the last group in a run, which has
+    no "next" to absorb into. A single left-to-right pass - a group that's
+    still undersized after being merged into (rare: two undersized
+    neighbors) is left as-is rather than chasing a fixed point, since by
+    then it's already picked up real content and further chasing has
+    diminishing returns for a heuristic step boundary.
+
+    Args:
+        groups: Groups of consecutive units from the boundary-decision pass,
+            before any size floor was applied.
+        min_merge_tokens: Minimum total token_count for a group to stand alone.
+
+    Returns:
+        Groups with (most) undersized ones folded into a neighbor.
+    """
+    if len(groups) <= 1:
+        return groups
+    merged: list[list[Unit]] = []
+    for i, group in enumerate(groups):
+        tokens = sum(u.token_count for u in group)
+        if tokens >= min_merge_tokens:
+            merged.append(group)
+        elif i + 1 < len(groups):
+            groups[i + 1] = group + groups[i + 1]
+        elif merged:
+            merged[-1] = merged[-1] + group
+        else:
+            merged.append(group)
+    return merged
+
+
 def _group_run_into_steps(
     run: list[Unit],
     min_step_tokens: int,
     max_step_tokens: int,
     semantic_percentile: float,
+    min_merge_tokens: int,
     vectors: np.ndarray | None,
 ) -> list[list[Unit]]:
     """Applies the step-boundary decision to a contiguous run of
@@ -138,6 +188,7 @@ def _group_run_into_steps(
         max_step_tokens: Passed through to `_boundary_reason`.
         semantic_percentile: Percentile of `run`'s own adjacent-similarity
             distribution treated as a semantic-jump threshold.
+        min_merge_tokens: Passed through to `_merge_undersized_groups`.
         vectors: Precomputed (len(run), dim) embeddings for `run`'s units
             (see `regroup_chunked_documents`, which batches the embedding
             calls across many runs/documents rather than one call per run),
@@ -182,7 +233,7 @@ def _group_run_into_steps(
         else:
             current.append(unit)
     groups.append(current)
-    return groups
+    return _merge_undersized_groups(groups, min_merge_tokens)
 
 
 def regroup_chunked_documents(
@@ -191,6 +242,7 @@ def regroup_chunked_documents(
     max_step_tokens: int = DEFAULT_MAX_STEP_TOKENS,
     semantic_percentile: float = DEFAULT_SEMANTIC_PERCENTILE,
     min_units_for_semantic: int = DEFAULT_MIN_UNITS_FOR_SEMANTIC,
+    min_merge_tokens: int = DEFAULT_MIN_MERGE_TOKENS,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_backend: str = DEFAULT_EMBEDDING_BACKEND,
     embedding_base_url: str = DEFAULT_EMBEDDING_BASE_URL,
@@ -219,6 +271,9 @@ def regroup_chunked_documents(
         semantic_percentile: Passed through to `_boundary_reason`'s threshold.
         min_units_for_semantic: Minimum run length before the semantic
             fallback applies at all.
+        min_merge_tokens: Passed through to `_merge_undersized_groups` - the
+            real floor on a step's size (min_step_tokens is not; see module
+            docstring).
         embedding_model: Passed through to `embeddings.embed`.
         embedding_backend: "vllm" or "local" - see `embeddings.embed`.
         embedding_base_url: ["vllm" only] Passed through to `embeddings.embed`.
@@ -267,7 +322,9 @@ def regroup_chunked_documents(
             if (doc_i, seg_i) in offsets:
                 start, end = offsets[(doc_i, seg_i)]
                 vectors = all_vectors[start:end]
-            for group in _group_run_into_steps(run, min_step_tokens, max_step_tokens, semantic_percentile, vectors):
+            for group in _group_run_into_steps(
+                run, min_step_tokens, max_step_tokens, semantic_percentile, min_merge_tokens, vectors
+            ):
                 result.append(_merge_group(group, text) if len(group) > 1 else group[0])
 
         for index, unit in enumerate(result):

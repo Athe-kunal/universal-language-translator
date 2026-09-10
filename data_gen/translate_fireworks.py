@@ -9,10 +9,12 @@ steps, still capped at config.MAX_STEP_TOKENS) -> one translation request
 per translatable step.
 
 Always writes, under --output_dir:
-  - chunked_docs.jsonl: the full chunked+regrouped ChunkedDocument per
-    source document (doc_id, gaps, units...) - needed to splice
-    translations back into whole documents via chunking.reconstruct().
-    Also what resumability is based on (a doc already here is skipped).
+  - units.jsonl: one row per translatable unit ({"custom_id", "doc_id",
+    "source", "en", "spans", "input_tokens"}) - everything needed to stitch
+    batch results back into the final {"id", "steps": [{"en","hi"}, ...]}
+    dataset later, and nothing else (not the full ChunkedDocument - no
+    gaps, no non-translatable units, no fingerprints). Also what
+    resumability is based on (a doc already here is skipped).
 
 Then, depending on config.USE_BATCH_API:
   - True: batch_requests_NNN.jsonl - Fireworks Batch Inference API rows
@@ -31,7 +33,6 @@ Usage:
 
 import argparse
 import asyncio
-import dataclasses
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -116,19 +117,19 @@ def prior_context(doc: ChunkedDocument, unit: Unit, max_alnum_chars: int = _PRIO
     return tail.strip() or None
 
 
-def load_done_doc_ids(chunked_docs_file: Path) -> set[str]:
+def load_done_doc_ids(units_file: Path) -> set[str]:
     """Doc ids already chunked in a prior run, so a rerun can resume.
 
     Args:
-        chunked_docs_file: Path to the (possibly not-yet-existing) chunked_docs.jsonl.
+        units_file: Path to the (possibly not-yet-existing) units.jsonl.
 
     Returns:
         Set of doc_ids already present.
     """
-    if not chunked_docs_file.exists():
+    if not units_file.exists():
         return set()
     done = set()
-    with open(chunked_docs_file, encoding="utf-8") as f:
+    with open(units_file, encoding="utf-8") as f:
         for line in f:
             try:
                 done.add(json.loads(line)["doc_id"])
@@ -189,8 +190,34 @@ def chunk_all(
     return results
 
 
-def build_requests(doc: ChunkedDocument) -> list[dict]:
-    """One Fireworks batch request row per translatable unit in `doc`.
+def _translatable_units(doc: ChunkedDocument, min_tokens: int) -> list[Unit]:
+    """`doc`'s translatable units that meet `min_tokens` - the shared
+    filter behind both `build_requests` and `build_units_meta`, so it can't
+    drift between the two (they must agree, or units.jsonl and
+    batch_requests_*.jsonl's custom_id sets diverge).
+
+    `regroup_chunked_documents`'s merge-floor pass already folds an
+    undersized step into a neighbor wherever possible, but can't when a
+    step is the only translatable unit in its run (sandwiched between two
+    non-translatable units, e.g. a one-line ASCII-art fragment or stray
+    brace between code blocks - never merged across those, by design).
+    `min_tokens` is the backstop for that residual case: such fragments
+    carry ~no translatable content anyway, so they're dropped rather than
+    sent as their own request.
+
+    Args:
+        doc: A regrouped ChunkedDocument (see `regroup_chunked_documents`).
+        min_tokens: Minimum token_count for a unit to be kept.
+
+    Returns:
+        Matching units, in document order.
+    """
+    return [unit for unit in doc.units if unit.translate and unit.token_count >= min_tokens]
+
+
+def build_requests(doc: ChunkedDocument, min_tokens: int = config.IGNORE_MIN_TOKENS) -> list[dict]:
+    """One Fireworks batch request row per translatable unit in `doc` (see
+    `_translatable_units` for the `min_tokens` filter).
 
     Each request's system prompt is rendered per-unit, with up to
     `_PRIOR_CONTEXT_ALNUM_CHARS` of the immediately preceding unit's English
@@ -198,17 +225,17 @@ def build_requests(doc: ChunkedDocument) -> list[dict]:
 
     Args:
         doc: A regrouped ChunkedDocument (see `regroup_chunked_documents`).
+        min_tokens: Passed through to `_translatable_units`. Must match
+            `build_units_meta`'s min_tokens - see main()'s single shared call.
 
     Returns:
         Fireworks batch rows: {"custom_id", "body": {"messages", "max_tokens", "temperature"}}.
         Kept to exactly Fireworks' documented row schema - input-token
         metadata for outlier-spotting goes in a parallel file, see
-        `build_request_meta`.
+        `build_units_meta`.
     """
     requests = []
-    for unit in doc.units:
-        if not unit.translate:
-            continue
+    for unit in _translatable_units(doc, min_tokens):
         max_tokens = min(
             _MAX_OUTPUT_TOKENS, max(_MIN_OUTPUT_TOKENS, unit.token_count * _OUTPUT_TOKEN_MULTIPLIER)
         )
@@ -229,33 +256,51 @@ def build_requests(doc: ChunkedDocument) -> list[dict]:
     return requests
 
 
-def build_request_meta(doc: ChunkedDocument) -> list[dict]:
-    """One metadata row per translatable unit in `doc`, parallel to
-    `build_requests`' rows (same custom_id) but kept out of the Fireworks
-    batch rows themselves, whose schema Fireworks documents exactly as
-    {"custom_id", "body"}.
+def build_units_meta(doc: ChunkedDocument, min_tokens: int = config.IGNORE_MIN_TOKENS) -> list[dict]:
+    """One row per translatable unit in `doc` (see `_translatable_units`
+    for the `min_tokens` filter - must be called with the same `min_tokens`
+    as `build_requests`, so units.jsonl and batch_requests_*.jsonl stay in
+    lockstep on custom_id) - everything needed later to stitch batch
+    results (custom_id -> translated text) into the final {"id", "steps":
+    [{"en", "hi"}, ...]} dataset, and nothing else.
 
-    input_tokens is `chunking.py`'s protected-text token count (what's
-    actually sent) - once translations come back, compare each row's output
-    token count against this to flag suspiciously huge (repetition/
-    hallucination) or tiny (truncated/empty) translations before they reach
-    a training or eval set.
+    Deliberately NOT the full `ChunkedDocument` (doc_id/gaps/every unit
+    including non-translatable code/math/rule ones/fingerprints/stats) -
+    that's for byte-exact whole-document reconstruction, which this
+    pipeline's actual output shape (a flat steps list, matching
+    reasoning_hi_train.jsonl) never needs: non-translatable units aren't
+    steps at all, and gaps between them are irrelevant once the target is
+    "translated steps in order," not "the original document with pieces
+    swapped in." At 50K+ documents the full-ChunkedDocument dump is
+    hundreds of KB per document; this is a few hundred bytes.
+
+    input_tokens (protected-text token count) is included for the same
+    per-unit QC purpose the old request_meta.jsonl served: once
+    translations come back, compare each row's output token count against
+    it to flag suspiciously huge (repetition/hallucination) or tiny
+    (truncated/empty) translations before they reach a training set.
 
     Args:
         doc: A regrouped ChunkedDocument (see `regroup_chunked_documents`).
+        min_tokens: Passed through to `_translatable_units`.
 
     Returns:
-        {"custom_id", "doc_id", "source", "input_tokens"} rows.
+        {"custom_id", "doc_id", "source", "en", "spans", "input_tokens"}
+        rows, in document order. "spans" is [{"placeholder", "original"},
+        ...] - enough to restore ⟦N⟧ placeholders in the translated text,
+        without the full ProtectedSpan (kind/start/end are only needed for
+        the whole-document reconstruction path this isn't doing).
     """
     return [
         {
             "custom_id": unit.unit_id,
             "doc_id": doc.doc_id,
             "source": doc.source,
+            "en": unit.text_raw,
+            "spans": [{"placeholder": s.placeholder, "original": s.original} for s in unit.spans],
             "input_tokens": unit.token_count,
         }
-        for unit in doc.units
-        if unit.translate
+        for unit in _translatable_units(doc, min_tokens)
     ]
 
 
@@ -265,7 +310,7 @@ def summarize_input_tokens(meta_rows: list[dict]) -> dict:
     hinting at a chunking regression) without scanning request_meta.jsonl.
 
     Args:
-        meta_rows: Rows from `build_request_meta`, across all documents.
+        meta_rows: Rows from `build_units_meta`, across all documents.
 
     Returns:
         {"total_requests", "total_input_tokens", "min", "p50", "p90", "max"}
@@ -351,10 +396,10 @@ def main() -> None:
     load_dotenv()
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    chunked_docs_file = args.output_dir / "chunked_docs.jsonl"
+    units_file = args.output_dir / "units.jsonl"
 
-    done = load_done_doc_ids(chunked_docs_file)
-    logger.info(f"Loaded {len(done)} already-chunked doc ids from {chunked_docs_file}")
+    done = load_done_doc_ids(units_file)
+    logger.info(f"Loaded {len(done)} already-chunked doc ids from {units_file}")
 
     ot3_rows = sample_openthoughts3_shards(args.num_openthoughts3, args.seed, done)
     nr_rows = sample_natural_reasoning(args.num_natural_reasoning, args.seed, done)
@@ -379,39 +424,36 @@ def main() -> None:
         max_step_tokens=config.MAX_STEP_TOKENS,
         semantic_percentile=config.SEMANTIC_PERCENTILE,
         min_units_for_semantic=config.MIN_UNITS_FOR_SEMANTIC,
+        min_merge_tokens=config.MIN_MERGE_TOKENS,
         embedding_model=config.EMBEDDING_MODEL,
         embedding_backend=config.EMBEDDING_BACKEND,
         embedding_base_url=config.EMBEDDING_BASE_URL,
         embedding_device=config.EMBEDDING_DEVICE,
         embed_batch_size=config.EMBED_BATCH_SIZE,
     )
-    with open(chunked_docs_file, "a", encoding="utf-8") as f:
-        for regrouped in regrouped_docs:
-            f.write(json.dumps(dataclasses.asdict(regrouped), ensure_ascii=False) + "\n")
-    logger.info(f"Wrote {len(regrouped_docs)} chunked documents to {chunked_docs_file}")
-
     all_requests = []
-    all_meta = []
+    all_units_meta = []
     for doc in regrouped_docs:
         all_requests.extend(build_requests(doc))
-        all_meta.extend(build_request_meta(doc))
+        all_units_meta.extend(build_units_meta(doc))
     logger.info(f"Built {len(all_requests)} translation requests")
 
-    meta_file = args.output_dir / "request_meta.jsonl"
-    with open(meta_file, "a", encoding="utf-8") as f:
-        for row in all_meta:
+    with open(units_file, "a", encoding="utf-8") as f:
+        for row in all_units_meta:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    logger.info(f"Wrote {len(all_units_meta)} units to {units_file}")
+
     # Manifest is a fresh summary of *this run's* requests, not the
-    # cumulative resumed total (unlike chunked_docs.jsonl/request_meta.jsonl,
-    # which append) - it's meant to be eyeballed right after this run.
-    summary = summarize_input_tokens(all_meta)
+    # cumulative resumed total (unlike units.jsonl, which appends) - it's
+    # meant to be eyeballed right after this run.
+    summary = summarize_input_tokens(all_units_meta)
     manifest_file = args.output_dir / "manifest.json"
     with open(manifest_file, "w", encoding="utf-8") as f:
         json.dump({"documents": len(regrouped_docs), "input_tokens": summary}, f, indent=2)
     logger.info(
         f"Input tokens this run: total={summary['total_input_tokens']} "
         f"min={summary['min']} p50={summary['p50']} p90={summary['p90']} max={summary['max']} "
-        f"(see {manifest_file} / {meta_file})"
+        f"(see {manifest_file} / {units_file})"
     )
 
     if config.USE_BATCH_API:

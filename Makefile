@@ -30,6 +30,9 @@ sample-reasoning:
 		--seed "$(SAMPLE_REASONING_SEED)" \
 		--output_file "$(SAMPLE_REASONING_OUTPUT_FILE)"
 
+poll:
+	uv run python -m data_gen.submit_fireworks_batch poll --batch_dir fireworks_batch_30k \
+      --job_id reasoning-hi-30k --output_dataset_id reasoning-hi-30k-output
 # Chunks OpenThoughts3/natural_reasoning/OpenCodeReasoning documents and
 # translates them via Fireworks — batch request files or direct online
 # calls, per data_gen/config.py's USE_BATCH_API toggle (that file is the
@@ -302,4 +305,4 @@ rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-
 		$(RL_DOCKER_IMAGE) \
 		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc reasoning-hi-dataset qwen3-a2d-bd3lm-train-reasoning-hi rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc reasoning-hi-dataset qwen3-a2d-bd3lm-train-reasoning-hi rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc poll
