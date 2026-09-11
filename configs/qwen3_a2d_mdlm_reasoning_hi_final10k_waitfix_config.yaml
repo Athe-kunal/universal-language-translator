@@ -1,0 +1,63 @@
+# MDLM counterpart to qwen3_a2d_bd3lm_reasoning_hi_final10k_waitfix_config.yaml -
+# same 10k-step "Wait"-normalized data, same base-checkpoint family, but the
+# plain MDLM objective (whole-sequence masked diffusion) instead of BD3LM
+# (block-causal + per-block noising), for a direct MDLM-vs-BD3LM comparison
+# on this dataset. Uses dllm-hub's own MDLM-pretrained checkpoint (not the
+# BD3LM one) since the two objectives need differently-trained base weights -
+# see qwen3_a2d_bpcc_translation_config.yaml's precedent.
+#
+# fixed_canvas_length is set to 0 (disabled) rather than MDLMTrainingArguments'
+# default of 128: that default was sized for BPCC's short sentence pairs, but
+# reasoning_hi steps run past 1000 tokens (see the 96-token canvas truncation
+# bug found and fixed in validation/validate_reasoning_hi.py) - a fixed
+# 128-wide canvas would silently truncate most of this dataset the same way.
+# Falls back to ordinary dynamic batch-max padding (paired with
+# group_by_length, inherited from _base_chunked_translation.yaml) instead.
+#
+# Run:
+#   make train CONFIG=configs/qwen3_a2d_mdlm_reasoning_hi_final10k_waitfix_config.yaml GPUS=1 GPU_IDS=3
+extends: _base_chunked_translation.yaml
+
+model:
+  model_name_or_path: "dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "reasoning_hi_final_10k_train_waitfix.jsonl"
+  eval_jsonl_path: "reasoning_hi_final_10k_val_waitfix.jsonl"
+  dataset_format: "chunked"
+  max_length: 2048
+  max_token_length: 2048
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "reasoning"
+      chunks_field: "steps"
+
+training:
+  trainer: "mdlm"
+  fixed_canvas_length: 0
+  output_dir: ".models/qwen3-a2d-mdlm-reasoning-hi-final10k-waitfix"
+  num_train_epochs: 3
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  per_device_eval_batch_size: 8
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  bf16: true
+  group_by_length: true
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  save_total_limit: 3
+  logging_steps: 10
+  seed: 42
+  report_to: "all"
+  wandb_project: "universal-language-translator"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"

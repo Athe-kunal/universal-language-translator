@@ -235,3 +235,7 @@ wandb/
 artifacts
 
 fireworks_batch*
+
+.venv-dinfer
+
+.dinfer*.json
