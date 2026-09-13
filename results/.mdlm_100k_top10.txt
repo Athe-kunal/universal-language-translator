@@ -1,0 +1,880 @@
+=== idx=19 sim=0.238 rep=1.000 fffd=False ===
+EN:   Wait:
+
+Wait, actually (3 * L_{200}) / L_{201} = (L3 * L_{200}) / L_{201}
+
+Therefore, the expression is (L3 * L_{200}) / L_{201}
+
+REF:  रुको, रुको, वास्तव में (3 * L_{200}) / L_{201} = (L3 * L_{200}) / L_{201}
+
+इसलिए, व्यक्ति का व्यक्ति (L3 * L_{200}) / L_{201}
+PRED: रुको, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट, वेट
+
+=== idx=50 sim=0.648 rep=0.000 fffd=False ===
+EN:   But maybe this may miss incrementing? 
+
+Wait, for example, suppose that 
+
+tree[idx] was already equal or larger. We do not need to update the higher nodes, since the current value is not changing. Thus, the higher nodes should have already included this value. Therefore yes, we can break when tree[idx] >= value. 
+
+Thus, this function is correct. 
+
+Now, putting this together. 
+
+Now, Let's write the entire code.
+
+Here's the code:
+
+import bisect
+
+class FenwickTreeMax:
+
+REF:  परन्तु यह शायद बढ़ते हुए मिस कर सकता है 
+
+वेट, उदाहरण के लिए, सोचें कि 
+
+tree[idx] पहले से ही समान या बड़ा था। हमें उच्च नोड्स को अपडेट करने की आवश्यकता नहीं है, क्योंकि वर्तमान मान बदल रहा है। इसलिए, उच्च नोड्स में यह मान शामिल होना चाहिए। इसलिए, हम tree[idx] >= value पर तोड़ सकते हैं। 
+
+इस प्रकार, यह फ़ंक्शन सही है। 
+
+अब, इसे एक साथ लाना। 
+
+अब, आइए पूरा कोड लिखें।
+
+```python
+import bisect
+
+class FenwickTreeMax:
+```
+PRED: लेकिन शायद यह लगता है कि अग्र बना होगा? 
+
+रुको, उदाहरण के लिए, लगता कि 
+
+tree[idx] अले equilibrium या बड़ा होता है। हमें ऊपर होड को जोड़ने की आवश्यक नहीं, क्योंकि वर्तमान का बदला नहीं है। इसलिए, ऊपर होड को यह नहीं होगा जो अले होने के लिए है। 
+
+इसलिए, यह फंक्शन सही है। 
+
+अब, इसे को साथ लगता। 
+
+अब, आइए कोड को लिखें।
+
+=== idx=67 sim=0.650 rep=0.000 fffd=True ===
+EN:   But can we make this shorter with lambda? Wait the filter can be done inline.
+
+Putting all together in one line:
+
+Perhaps:
+
+n,p=map(int,input().split())
+exec("xps=[pow(i,p,n)for i in range(n)];print([(a,b,c)for a in range(1,n)for b in range(1,n)for c in range(1,n)if(xps[a]+xps[b]-xps[c])%n<1])")
+
+REF:  क्या हम इसे लैम्ब्डा फंक्शन का उपयोग करके छोटा कर सकते हैं? वेट, फिल्टर को इनलाइन किया जा सकता है।
+
+सब कुछ एक ही पंक्ति में जोड़कर:
+
+शायद:
+
+n,p=map(int,input().split())
+exec("xps=[pow(i,p,n)for i in range(n)];print([(a,b,c)for a in range(1,n)for b in range(1,n)for c in range(1,n)if(xps[a]+xps[b]-xps[c])%n<1])")
+PRED: लेकिन हम इसे छोटा बनाए सकते हैं जो लाइमा के लिए इसे छोटा बनाए हैं। वेट फिल्टर इनलेनल में जाना ककता है।
+
+एक लिए जोड़े को लिखा जा� सकते हैं:
+
+शायद:
+
+नैप=मैप(इनट,इनपलटी())
+एक्सपस्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी(पॉइल्सी)))")
+
+=== idx=13 sim=0.669 rep=0.017 fffd=True ===
+EN:   Wait, perhaps the optimal approach is to collect as much Super-98 as possible, then Premium-95, and only then Regular-92. So whenever you have a choice between gas stations, choose the one with the highest type, and as far as possible.
+
+So, the algorithm would be:
+
+1. Start at fi, tank full of Super-98.
+
+2. At each step, look for all gas stations in the current reachable range (current position + current fuel).
+
+3. Among them, select the one with the highest fuel type. If multiple, select the farthest one.
+
+4. Drive to that station. Use the available fuel (highest first) to cover the distance.
+
+5. At the station, refill the tank with the maximum possible amount of the station's fuel type.
+
+6. Repeat until reaching e.
+
+But how does this account for the fuel types in the tank?
+
+Wait, perhaps the process is as follows:
+
+Each time you refuel at a station, you can choose to take as much of that station's fuel type as possible. Then, when driving the next segment, you use the fuel types in the order of their grades (highest first).
+
+But the initial fuel is Super-98. So whenever possible, the car will use Super-98 first. Then, if that's not enough, use Premium, then Regular.
+
+So the optimal strategy is to refuel as much Super-98 as possible, then Premium, then Regular, but this depends on the available stations.
+
+REF:  रुको, कि सबसे अच्छा दृष्टिकोण यह है कि हम जितना संभव हो उतना Super-98 इकट्ठा करें, फिर Premium-95, और फिर केवल Regular-92। इसलिए जब आप गैस स्टेशनों के बीच चलते हैं, तो सबसे उच्च प्रकार वाले स्टेशन का चयन करें, और संभव हो तो सबसे दूर का।
+
+तो अल्गोरिथ्म यह होगा:
+
+1. शुरू करें fi, टैंक में Super-98 के साथ पूरा है।
+
+2. प्रत्येक चरण में, वर्तमान पहुंच योग्य दायरे में सभी गैस स्टेशनों की तलाश करें (वर्तमान स्थिति + वर्तमान ईंधन)।
+
+3. उनमें से सबसे उच्च ईंधन प्रकार वाले स्टेशन का चयन करें। यदि कई, तो सबसे दूर का।
+
+4. उस स्टेशन पर जाएं। उपलब्ध ईंधन (सबसे उच्च पहले) का उपयोग करके दूरी को कवर करें।
+
+5. स्टेशन पर, टैंक को स्टेशन के ईंधन प्रकार के साथ अधिकतम संभव मात्रा के साथ भरें।
+
+6. e तक पहुंचने तक दोहराएं।
+
+लेकिन यह ईंधन प्रकारों के लिए कैसे खाता है?
+
+क्या हो सकता है कि प्रक्रिया यह है:
+
+प्रत्येक बार जब आप स्टेशन पर ईंधन भरते हैं, तो आप उस स्टेशन के ईंधन प्रकार की अधिकतम संभव मात्रा का चयन कर सकते हैं। फिर, अगले सेगमेंट के लिए, आप ईंधन प्रकारों के क्रम में ईंधन का उपयोग करते हैं (सबसे उच्च पहले)।
+
+लेकिन शुरुआती ईंधन Super-98 है। इसलिए जब संभव हो तो Super-98 का उपयोग करें, फिर Premium, फिर Regular।
+
+तो सबसे अच्छा रणनीति यह है कि स्टेशन पर जितना संभव हो उतना Super-98 भरें, फिर Premium, फिर Regular, लेकिन यह उपलब्ध स्टेशनों पर निर्भर करता है।
+PRED: रुको, शायद अबसे अन्टिक तरीक का दृष्टिक तरीक है कि Super-98 को बहुत बचुआता है, फिर Premium-95, और फिर Regular-92। तो यह जब आप एक चुना जो सेटिशन के बीच चुना है, तो आप चुनती से सबसे आधिक तरीक का चुनती है, और यह आधिक तरीक की बीच अधिक तरीक की बीच है।
+
+तो, गणना एल्गोरिम होगा:
+
+1. शुरू हू से, टैक Super-98ा बचुआता है।
+
+2. प्रत्येक चरण पर, सभी सेटिशन को वर्तमा वर्तमा तरीक के लें जाएं (वर्तमा वर्तमा तरी� के रूप + वर्तमा तरीक)।
+
+3. उनमें, सबसे आधिक तरीक का चुनती है। यदि एक बार, इससे का अधिक एक का चुनती है।
+
+4. इस पेटिशन के लिए, उपयोग करें (सबसे आधिक तरीक के लिए) को दूरी को जान करें।
+
+5. पेटिशन के लिए, टैक से�िशन के लिए, उपयोग करें जो संभवता के लिए उपयोग करें।
+
+6. तक तक तक जिसी e तक जान करें।
+
+लेकिन यह टैक से�िशन में व्यक्ति के लिए कोण की गलती है?
+
+वहीं, शायद प्रकार यह इसके लिए है:
+
+प्रत्येक बार आप सेटिशन में उपयोग करते हैं, तो आप इसे को चुनते हैं। फिर Premium, फिर Regular
+
+=== idx=59 sim=0.671 rep=0.017 fffd=False ===
+EN:   Wait, let's see:
+
+Suppose current player is Taro. He plays a card. Then, after that, we check if Taro's hand is empty. If yes, break. Else, switch to Hanako.
+
+Wait, but after playing a card, the current player is still Taro. So the code would check if Taro has zero cards (after removing the chosen card) and break. Then, the next step is to switch the player to Hanako.
+
+REF:  तारो को वर्तमान खिलाड़ी मान लें। वह एक कार्ड खेलता है। फिर, उसके बाद, हम तारो के हाथ की जांच करते हैं। यदि हाँ, तो तोड़ दें। अन्यथा, हानाको पर स्विच करें।
+
+लेकिन तारो ने कार्ड खेलने के बाद, वर्तमान खिलाड़ी अभी भी तारो है। इसलिए, कोड तारो के पास शून्य कार्ड होने की जांच करेगा (कार्ड को हटाने के बाद) और तोड़ देगा। फिर, अगला कदम हानाको पर खिलाड़ी को बदलना होगा।
+PRED: रुको, देखें:
+
+मान्तव जातीका Taro है। वह एक कोड को लगता है। फिर, बाद Taro का आंड की जाँच करने के बाद, हमें Taro की आंड की खालीय है। यदि हाँ, तो बटें। अन्यथा, Hanako के बाद एक कोड को लगता है, तो वही जातीका Taro है। तो कोड Taro को शून्य कोड (निर्चयन कोड को बड़ने से) और बटें। फिर, Hanako।
+
+=== idx=27 sim=0.699 rep=1.000 fffd=True ===
+EN:   Wait, in a convex quadrilateral, the angles at point A from triangles ABC and ADC would be supplementary? If AC is a diagonal, then yes, the angles on either side at point A should add up to 180 degrees, making θ + φ = π radians.
+
+Therefore, cosφ = cos(π - θ) = -cosθ.
+
+Thus, in the second equation,
+
+16 = 36 + z² - 2*6*z*(-cosθ)
+
+16 = 36 + z² + 12 z cosθ
+
+Therefore,
+
+From first equation:
+
+REF:  रुको, एक convex quadrilateral में, चतुर्भुज ABCD के त्रिभुज ABC और ADC के बिंदु A पर कोण सप्लीमेंट्री होंगे? यदि AC एक diagonal है, तो हाँ, बिंदु A पर दोनों ओर के कोण का योग 180 डिग्री होगा, जिससे θ + φ = π रेडियन होगा।
+
+इसलिए, cosφ = cos(π - θ) = -cosθ।
+
+इस प्रकार, दूसरे समीकरण में,
+
+16 = 36 + z² - 2*6*z*(-cosθ)
+
+16 = 36 + z² + 12 z cosθ
+
+इसलिए,
+
+पहले समीकरण से:
+PRED: रुको, एक विस्त्रिक वार्तिति में, बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं बिंदुओं दोस्�ाधार हों? अगर AC एक डिएलेड है, तो हाँ, बिंदुओं के बिंदुओं के बिंदुओं के बिंदुओं को 180 डिग्री होना चाहिए, जिससे θ + φ = π रेडिनेड होगा।
+
+इसलिए, cosφ = cos(π - θ) = -cosθ.
+
+इसे एक समीकरण में,
+
+16 = 36 + z² - 2*6*z*(-cosθ)
+
+=== idx=6 sim=0.706 rep=1.000 fffd=False ===
+EN:   Wait let me recalculate:
+
+Suppose one player has 6 wins (vs the other 6),
+
+so each of those 6 players has at least 1 loss.
+
+The remaining matches are among the 6 players,
+
+total matches: C(6,2)=15,
+
+which can have W wins and D draws,
+
+so W + D=15,
+
+total wins contributed by these is W,
+
+so total tournament wins:6 +W=15,
+
+so W=9,
+
+so D=6,
+
+so total draws in tournament is D=6,
+
+therefore total draws=6,
+
+but the problem says 11.
+
+Thus, the problem's 11 draws would require,
+
+if we want a player with 6 wins,
+
+the remaining matches must have 11 draws,
+
+so D=11,
+
+therefore W=15−11=4,
+
+total wins:6+4=10,
+
+but problem states total wins=15,
+
+so inconsistency.
+
+Thus, to get total wins as15,
+
+if a player has 6,
+
+then the remaining W=9,
+
+which requires D=6 draws,
+
+so total draws=6≠11,
+
+so impossible.
+
+So under the problem's numbers,
+
+if there is a player with 6 wins,
+
+then total draws would be 6,
+
+which contradicts 11 in the problem,
+
+so to have 11 draws,
+
+so D=11,
+
+which requires that the remaining matches among the other 6 players must have D=11-0 (since the top player has 0 draws) =11 draws,
+
+so:
+
+In the remaining 15 matches between the other 6 players,
+
+number of draws is11,
+
+so number of decisive matches W=15−11=4,
+
+so total wins from those 6 players: total_additional_wins =4,
+
+so total tournament wins:6 (from top player) +4=10,
+
+so total wins would be10≠15,
+
+so conflicting.
+
+Therefore, it is impossible for a player to have 6 wins, given the problem's numbers of total draws=11 and total wins=15.
+
+Therefore, the maximum number of wins a player can have is less.
+
+Let me see for maximum possible score:
+
+Let x be number of wins the top player has,
+
+so the remaining matches among other players:
+
+They have C(6,2)=15 games,
+
+REF:  रुको, मैं फिर से गणना करनी चाहिए:
+
+मान लें कि एक खिलाड़ी के पास 6 जीत है (दूसरे के खिलाफ 6),
+
+तो उस 6 खिलाड़ियों में से प्रत्येक के पास कम से कम 1 हार है।
+
+बाकी के मैच उन 6 खिलाड़ियों के बीच हैं,
+
+कुल मैच: C(6,2)=15,
+
+जो W जीत और D ड्रॉ हो सकते हैं,
+
+तो W + D=15,
+
+इन से कुल जीत दी गई है W,
+
+तो टूर्नामेंट की कुल जीत:6 +W=15,
+
+तो W=9,
+
+तो D=6,
+
+तो टूर्नामेंट की कुल ड्रॉ है D=6,
+
+तो कुल ड्रॉ=6,
+
+लेकिन समस्या में यह लिखा है 11.
+
+इसलिए, समस्या के 11 ड्रॉ की आवश्यकता होगी,
+
+यदि हम एक खिलाड़ी के लिए 6 जीत चाहते हैं,
+
+तो शेष मैचों में 11 ड्रॉ होना चाहिए,
+
+तो D=11,
+
+तो W=15−11=4,
+
+कुल जीत:6+4=10,
+
+लेकिन समस्या में यह लिखा है कि कुल जीत=15,
+
+तो असंगति।
+
+इस प्रकार, कुल जीत को 15 के रूप में प्राप्त करने के लिए,
+
+यदि एक खिलाड़ी के पास 6 है,
+
+तो शेष W=9,
+
+जो D=6 ड्रॉ की आवश्यकता है,
+
+तो कुल ड्रॉ=6≠11,
+
+तो असंभव।
+
+इस प्रकार, समस्या के संख्याओं के अनुसार,
+
+यदि एक खिलाड़ी के पास 6 जीत है,
+
+तो कुल ड्रॉ होगा 6,
+
+जो समस्या में 11 के साथ असंगत है,
+
+तो कुल ड्रॉ के लिए 11 होना चाहिए,
+
+तो D=11,
+
+जो कि शेष मैचों के बीच अन्य 6 खिलाड़ियों के लिए D=11-0 (क्योंकि शीर्ष खिलाड़ी के पास 0 ड्रॉ है) =11 ड्रॉ की आवश्यकता है,
+
+तो:
+
+शेष 15 मैचों के बीच अन्य 6 खिलाड़ियों के लिए,
+
+ड्रॉ की संख्या है11,
+
+तो निर्णायक मैचों की संख्या W=15−11=4,
+
+तो कुल जीत उन 6 खिलाड़ियों से है: total_additional_wins =4,
+
+तो कुल टूर्नामेंट जीत:6 (शीर्ष खिलाड़ी से) +4=10,
+
+तो कुल जीत होगी10≠15,
+
+तो असंगत।
+
+इस प्रकार, यह असंभव है कि एक खिलाड़ी के पास 6 जीत हो,
+
+समस्या के संख्याओं के अनुसार कुल ड्रॉ=11 और कुल जीत=15।
+
+इसलिए, एक खिलाड़ी के लिए अधिकतम जीत की संख्या कम है।
+
+अब मैं देखूंगा कि अधिकतम संभव स्कोर क्या है:
+
+एक खिलाड़ी के लिए जीत की संख्या को x के रूप में लिखें,
+
+तो शेष मैचों के बीच अन्य खिलाड़ियों के लिए:
+
+वे C(6,2)=15 गेम्स हैं
+PRED: मुझे फिर से गणना करें:
+
+कि एक एक पार्या 6 बीं (ने दिससे 6),
+
+तो उनके 6 पार्याओं के लिए कम कम 1 कम कारी है।
+
+प्रत्येक उनके 6 पार्याओं के शेष मामें C(6,2)=15,
+
+जो W बीं और D देखां करते हैं,
+
+तो W + D=15,
+
+तो कुल पार्या:6 +W=15,
+
+तो W=9,
+
+तो D=6,
+
+तो कुल देखांट में D=6,
+
+तो कुल देखांट=6,
+
+इसलिए कुल देखांट=6,
+
+लेकिन समस्या कहती 11.
+
+इसलिए, समस्या के 11 देखां आवश्यक है,
+
+यद हम एक पार्या 6 बीं,
+
+तो शेष मामें 11 देखें,
+
+तो D=11,
+
+इसलिए W=15−11=4,
+
+total wins:6+4=10,
+
+लेकिन समस्या कि कुल पार्या=15,
+
+इसलिए समस्या का समानती कहती है,
+
+इसलिए, कुल पार्या 15,
+
+यद एक पार्या 6 है,
+
+तो शेष W=9,
+
+जो D=6,
+
+तो D=6,
+
+तो D=6,
+
+तो total=6≠11,
+
+तो से total=6≠11,
+
+तो से total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11,
+
+तो total=6≠11
+
+=== idx=4 sim=0.709 rep=0.000 fffd=True ===
+EN:   So combining all four conditions ensures that the two bishops' coverage is completely disjoint.
+
+So the problem reduces to finding two cells (i1,j1) and (i2,j2) such that:
+
+- i1 - j1 != i2 - j2.
+
+- i1 + j1 != i2 + j2.
+
+- (i1 - j1) + (i2 + j2) is odd.
+
+- (i1 + j1) + (i2 - j2) is odd.
+
+
+REF:  तो चार स्थितियों को मिलान करके दो बिशप की कवरेज पूरी तरह से अलग हो जाती है।
+
+इस समस्या को हल करने के लिए, हमें दो सेल (i1,j1) और (i2,j2) ढूंढने की आवश्यकता है जो निम्नलिखित शर्तों को पूरा करते हैं:
+
+- i1 - j1 != i2 - j2।
+
+- i1 + j1 != i2 + j2।
+
+- (i1 - j1) + (i2 + j2) असमान है।
+
+- (i1 + j1) + (i2 - j2) असमान है।
+PRED: तो इनके चाहिए ची चारितमों को जोड़े के साथ संभावित करते हैं कि दो बाइोसियों के वेस्केल का शुरुआत �ूर्ण ह�या है।
+
+तो समस्या को दो जिल्स (i1,j1) और (i2,j2) के लिए ढूंढ़नने के लिए जोड़े से तक जा�ता है कि:
+
+- i1 - j1 != i2 - j2.
+
+- i1 + j1 != i2 + j2.
+
+- (i1 - j1) + (i2 + j2) एक है।
+
+- (i1 + j1) + (i2 - j2) एक है।
+
+=== idx=28 sim=0.713 rep=0.000 fffd=False ===
+EN:   Hence that's acceptable. So the distribution for n=4 would be pirate1 gets 99, pirate2 0, pirate3 1, pirate4 0. 
+
+But then wait the test case for n=5  pirates outputs 98 0 1 0 1, so for 5 pirates. Let's see if that holds.
+
+Wait let's compute the n=5 case. 
+
+REF:  तो यह स्वीकार्य है। इसलिए n=4 के लिए वितरण pirate1 को 99, pirate2 को 0, pirate3 को 1, pirate4 को 0 मिलता है।
+
+लेकिन फिर वेट टेस्ट केस n=5 पाइरेट्स के लिए आउटपुट है 98 0 1 0 1, तो 5 पाइरेट्स के लिए यह क्या हो सकता है। चलिए देखें कि यह क्या होता है।
+
+अब चलिए n=5 के मामले को गणना करते हैं।
+PRED: तो यह ठीकार है। इसलिए n=4 के लिए गुणान दिए राइपी1 गेता 99, राइपी2 0, राइपी3 1, राइपी4 0।
+
+लेकिन फिर वेट टेस केस के लिए n=5 राइपी1 राइपी2 राइपी3 राइपी4 देते हैं 98 0 1 0 1, इसलिए 5 राइपी के लिए। आइए यह है।
+
+वेट n=5 की गणना करें।
+
+=== idx=64 sim=0.732 rep=0.000 fffd=False ===
+EN:   Hmm. Let's think about the example. 
+
+In the first test case, N=1, L=4, R=5. The possible sequences are [4] and [5], so output is 2.
+
+In the second test case, N=2. The sequences of length 1 are 2, and for length 2, there are 3 possibilities: 44,45,55. So total 5.
+
+REF:  क्या हम इस उदाहरण पर विचार करें 
+
+पहले परीक्षण मामले में, N=1, L=4, R=5 है। संभव क्रम हैं [4] और [5], इसलिए निष्कर्ष है 2।
+
+दूसरे परीक्षण मामले में, N=2 है। लंबाई 1 के साथ क्रम हैं 2, और लंबाई 2 के लिए, संभावनाएं हैं 3: 44,45,55। इसलिए कुल है 5।
+PRED: मुझे यह उदाहरण के लिए सोचें।
+
+पहला मास्ट केसा में, N=1, L=4, R=5। अंभव संकोजेंक [4] और [5] हैं, इसलिए आउटपुट है 2।
+
+दूसरा मास्ट केसा में, N=2। लंबाई 1 के लिए संकोजेंक हैं 2, और लंबाई 2 के लिए, यहां 3 संभावना हैं: 44,45,55। इसलिए कुल 5।
+

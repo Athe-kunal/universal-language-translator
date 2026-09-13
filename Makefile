@@ -305,4 +305,34 @@ rl-docker-train-bpcc: # Launches GRPO training in $(RL_DOCKER_IMAGE) (rl-docker-
 		$(RL_DOCKER_IMAGE) \
 		bash rl/run_qwen3_0_6b_bpcc_fsdp.sh
 
-.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc reasoning-hi-dataset qwen3-a2d-bd3lm-train-reasoning-hi rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc poll
+# Standalone HTTP server for the LLaDA-MoE + dInfer reasoning-translation
+# checkpoint (.models/llada-moe-reasoning-hi-100k-waitfix/checkpoint-2000-fused).
+# Runs in its own venv (.venv-dinfer: vllm==0.10.2, transformers==4.57.1 -
+# incompatible with this repo's main venv pins). Kept resident on its own GPU
+# so app.py (main venv, no GPU/model dependency) can hit it over HTTP without
+# paying the load+warmup cost per Streamlit run. See dinfer_server.py.
+DINFER_SERVER_VENV ?= .venv-dinfer
+DINFER_SERVER_GPU   ?= 3
+DINFER_SERVER_PORT  ?= 8092
+DINFER_SERVER_PID   ?= .dinfer-server.pid
+
+.PHONY: dinfer-server-up
+dinfer-server-up: # Starts dinfer_server.py in the background on DINFER_SERVER_GPU/DINFER_SERVER_PORT.
+	$(DINFER_SERVER_VENV)/bin/python dinfer_server.py \
+		--gpu $(DINFER_SERVER_GPU) --port $(DINFER_SERVER_PORT) \
+		> dinfer_server.log 2>&1 & echo $$! > $(DINFER_SERVER_PID)
+	@echo "dInfer server starting on GPU $(DINFER_SERVER_GPU), port $(DINFER_SERVER_PORT) (pid $$(cat $(DINFER_SERVER_PID))); logs: dinfer_server.log"
+
+.PHONY: dinfer-server-down
+dinfer-server-down: # Stops the server started by dinfer-server-up.
+	@if [ -f $(DINFER_SERVER_PID) ]; then kill $$(cat $(DINFER_SERVER_PID)) && rm -f $(DINFER_SERVER_PID); else echo "no $(DINFER_SERVER_PID) found"; fi
+
+.PHONY: dinfer-server-logs
+dinfer-server-logs: # Tails the running dInfer server's logs.
+	tail -f dinfer_server.log
+
+.PHONY: app
+app: # Runs the EN->HI Streamlit demo (main venv - it's just an HTTP client). Needs dinfer-server-up running first.
+	uv run streamlit run app.py
+
+.PHONY: dataset sample-reasoning translate-reasoning train translate adapt-mmbert check-llada-tokenizer llada-moe-train-bpcc convert-llama-a2d a2d-warmup a2d-train-bpcc qwen3-a2d-train-bpcc qwen3-a2d-bd3lm-train-bpcc reasoning-hi-dataset qwen3-a2d-bd3lm-train-reasoning-hi rl-venv rl-dataset rl-reward-server-up rl-reward-server-down rl-train-bpcc rl-docker-build rl-docker-train-bpcc poll dinfer-server-up dinfer-server-down dinfer-server-logs app
