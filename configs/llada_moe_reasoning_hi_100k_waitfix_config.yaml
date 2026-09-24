@@ -1,0 +1,55 @@
+# LLaDA-MoE-7B-A1B-Instruct full fine-tune on reasoning_hi_final_100k_{train,val}_waitfix.jsonl,
+# 1 epoch, MDLM objective (LLaDA-MoE is only trained with MDLM). Needs FSDP2 (7B params do not fit DDP).
+#
+# fixed_canvas_length 0: reasoning steps run past 1000 tokens (the default of 128 truncates them).
+# Output goes to /mnt/data because each checkpoint is ~28GB and /home is nearly full.
+#
+# Run:
+#   CUDA_HOME=/usr/local/cuda PYTORCH_ALLOC_CONF=expandable_segments:True make llada-moe-train-bpcc \
+#     LLADA_CONFIG=configs/llada_moe_reasoning_hi_100k_waitfix_config.yaml LLADA_GPUS=2 LLADA_GPU_IDS=2,3
+extends: _base_chunked_translation.yaml
+
+model:
+  model_name_or_path: "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "reasoning_hi_final_100k_train_waitfix.jsonl"
+  eval_jsonl_path: "reasoning_hi_final_100k_val_waitfix.jsonl"
+  dataset_format: "chunked"
+  max_length: 2048
+  max_token_length: 2048
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "reasoning"
+      chunks_field: "steps"
+
+training:
+  trainer: "mdlm"
+  fixed_canvas_length: 0
+  output_dir: "/mnt/data/llada_moe_reasoning_hi_100k_waitfix"
+  num_train_epochs: 1
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: true
+  learning_rate: 1.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  bf16: true
+  group_by_length: true
+  eval_strategy: "steps"
+  eval_steps: 1000
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 2
+  logging_steps: 10
+  seed: 42
+  report_to: "tensorboard"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"

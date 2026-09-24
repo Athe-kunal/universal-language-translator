@@ -1,0 +1,53 @@
+# Qwen3-0.6B MDLM SFT on the full reasoning_hi_final_100k_{train,val}_waitfix.jsonl
+# (shuffled, non-contaminated split), 1 epoch. Trained after the BD3LM run for a direct comparison.
+# fixed_canvas_length 0 because reasoning steps run past 1000 tokens (the default of 128 truncates them).
+#
+# Run:
+#   CUDA_HOME=/usr/local/cuda make train CONFIG=configs/qwen3_a2d_mdlm_reasoning_hi_100k_waitfix_config.yaml GPUS=2 GPU_IDS=2,3
+extends: _base_chunked_translation.yaml
+
+model:
+  model_name_or_path: "dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1"
+  dtype: "bfloat16"
+  attn_implementation: null
+  lora: false
+
+data:
+  jsonl_path: "reasoning_hi_final_100k_train_waitfix.jsonl"
+  eval_jsonl_path: "reasoning_hi_final_100k_val_waitfix.jsonl"
+  dataset_format: "chunked"
+  max_length: 2048
+  max_token_length: 2048
+  mask_prompt_loss: true
+  num_proc: 4
+  tasks:
+    - name: "reasoning"
+      chunks_field: "steps"
+
+training:
+  trainer: "mdlm"
+  fixed_canvas_length: 0
+  output_dir: ".models/qwen3-a2d-mdlm-reasoning-hi-100k-waitfix"
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  per_device_eval_batch_size: 8
+  learning_rate: 3.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  bf16: true
+  group_by_length: true
+  eval_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"
+  save_steps: 1500
+  save_total_limit: 2
+  logging_steps: 10
+  seed: 42
+  report_to: "all"
+  wandb_project: "universal-language-translator"
+  time_epsilon: 1.0e-3
+  loss_weight_type: "uniform"
+  loss_norm_type: "token"
